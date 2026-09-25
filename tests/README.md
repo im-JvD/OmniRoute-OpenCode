@@ -1,46 +1,53 @@
-# Test harness for `omniroute-manager.sh`
+<div align="tight" dir="rtl">
 
-Runs the **real** script against a simulated WSL2/Iran environment
-(mock docker/daemon, sanctions 403s, mock PowerShell/WSL path, mock
-npm/pm2) plus a real Node OmniRoute mock server on port 20128.
+# هارنس تست برای `omniroute-manager.sh`
+
+اسکریپت **واقعی** را در برابر یک محیط شبیه‌سازی‌شده WSL2/ایران
+اجرا می‌کند: CLI و daemon docker با 403 تحریمی شبیه‌سازی می‌شوند،
+مسیر PowerShell/WSL و npm/pm2 هم mock هستند + یک mock server از
+OmniRoute با Node واقعی روی پورت 20128.
 
 ```bash
-bash run-tests.sh              # all 12 tests (T1-T12)
-bash run-tests.sh T2 T8 T11    # a subset
+bash run-tests.sh              # هر ۱۲ تست (T1 تا T12)
+bash run-tests.sh T2 T8 T11    # یک زیرمجموعه
 ```
 
-Exit code 0 = all assertions passed; 1 = at least one failure (the
-failing descriptions are printed at the end).
+خروجی 0 = همه‌ی assertionها سبز؛ 1 = حداقل یک شکست (شرح شکست‌ها در
+پایان چاپ می‌شود).
 
-Requirements: `bash`, `jq`, `node` (>= 18), `curl`, `git`,
-`util-linux` (`script(1)` for the TTY test). No root, no Docker, no
-Windows needed.
+نیازها: `bash`، `jq`، `node` (18 به بالا)، `curl`، `git` و
+`util-linux` (دستور `script(1)` برای تست TTY). به root، Docker یا
+ویندوز نیاز نیست.
 
-## Layout
+## چیدمان
 
-| Path | Purpose |
+| مسیر | کاربرد |
 |---|---|
-| `run-tests.sh` | 12 test groups (T1-T12), assertion helpers, per-test state reset. |
-| `mock-bin/docker` | Mock Docker CLI + "daemon". State in `$MOCK_STATE`. Simulates 403 for `docker.io/*` / `diegosouzapw/*` pulls, starts the mock server on `run`, simulates build success or OOM (`force_build_oom` flag). |
-| `mock-bin/service`, `mock-bin/powershell.exe`, `mock-bin/wslpath` | Mock privileged/Windows-side commands (daemon start/stop, `C:\Users\Sepehr system`, `/mnt/c`). |
-| `mock-bin/curl` | Forwards to real curl but records every URL to `curl-urls.log` (proves `get.docker.com` is never called). |
-| `mock-bin-node/npm`, `mock-bin-node/pm2` | Node-mode mocks (global install, pm2 start/jlist/delete). |
-| `mock-bin-build/git` | Shallow "clone" from the local `MOCK_CLONE_SRC` checkout. |
-| `mock-omniroute/server.mjs`, `catalog.json` | Real HTTP server speaking the OmniRoute v3.8.51 contract (`/healthz`, `/v1/models`, `/v1/chat/completions`, dashboard login + `/api/providers/bulk`). |
+| `run-tests.sh` | ۱۲ گروه تست (T1 تا T12)، helperهای assertion و پاکسازی state قبل از هر تست. |
+| `mock-bin/docker` | mock از CLI و daemon Docker. state در `$MOCK_STATE`. 403 را برای pullهای `docker.io/*` و `diegosouzapw/*` شبیه‌سازی می‌کند، در `run` سرور mock را روی 20128 بالا می‌آورد و build را با موفقیت یا OOM (در صورت flag `force_build_oom`) شبیه‌سازی می‌کند. |
+| `mock-bin/service`، `mock-bin/powershell.exe`، `mock-bin/wslpath` | mock دستورات privileged / سمت ویندوز (start/stop daemon، `C:\Users\Sepehr system`، `/mnt/c`). |
+| `mock-bin/curl` | به curl واقعی forward می‌شود ولی هر URL را در `curl-urls.log` ثبت می‌کند (ثابت می‌کند `get.docker.com` هرگز خوانده نمی‌شود). |
+| `mock-bin-node/npm`، `mock-bin-node/pm2` | mockهای حالت Node (نصب global، pm2 start/jlist/delete). |
+| `mock-bin-build/git` | «clone» shallow از یک checkout محلی `MOCK_CLONE_SRC`. |
+| `mock-omniroute/server.mjs`، `catalog.json` | سرور HTTP واقعی که قرارداد OmniRoute نسخه 3.8.51 را حرف می‌زند (`/healthz`، `/v1/models`، `/v1/chat/completions`، ورود داشبورد + `/api/providers/bulk`). |
 
-## Environment knobs used by the harness
+## متغیرهای محیطی که هارنس از آن‌ها استفاده می‌کند
 
-All are test overrides of the script's own `OMNIRoute_*` knobs - they
-also document the script's configurability:
+همه‌ی آن‌ها overrideهای تستیِ خودِ کلیدهای `OMNIRoute_*` اسکریپت
+هستند - و در عین حال قابلیت پیکربندی اسکریپت را هم مستند می‌کنند:
 
-`OMNIRoute_MNT_ROOT`, `OMNIRoute_DAEMON_JSON`, `OMNIRoute_LOG`,
-`OMNIRoute_SRC_DIR`, `OMNIRoute_DATA_DIR`, `OMNIRoute_MASTER_KEY_FILE`,
-`OMNIRoute_KEYS_FILE`, `OMNIRoute_SKIP_SWAP`,
-`OMNIRoute_IMAGE_GHCR` / `OMNIRoute_IMAGE_HUB` (pointed at `docker.io/*`
-refs in T8 to force 403 on *every* pull), `OMNIRoute_NO_DOCKER_BUILD`,
+`OMNIRoute_MNT_ROOT`، `OMNIRoute_DAEMON_JSON`، `OMNIRoute_LOG`،
+`OMNIRoute_SRC_DIR`، `OMNIRoute_DATA_DIR`،
+`OMNIRoute_MASTER_KEY_FILE`، `OMNIRoute_KEYS_FILE`،
+`OMNIRoute_SKIP_SWAP`، `OMNIRoute_IMAGE_GHCR` /
+`OMNIRoute_IMAGE_HUB` (در T8 به refهای `docker.io/*` نشانه رفته‌اند تا
+**همه** pullها 403 بزنند)، `OMNIRoute_NO_DOCKER_BUILD`،
 `OMNIRoute_GROQ_KEY` / `_OPENROUTER_KEY` / `_GEMINI_KEY` /
 `_CEREBRAS_KEY` / `_MISTRAL_KEY`.
 
-Each test starts from a wiped `TESTROOT` (`/tmp/omniroute-mgr-tests`)
-with a fake `HOME`, a fake `/mnt/c/Users/Sepehr system` (note the
-space), and a fresh mock state directory.
+هر تست از یک `TESTROOT` پاک‌شده شروع می‌شود
+(`/tmp/omniroute-mgr-tests`) با یک `HOME` فیک، یک
+`/mnt/c/Users/Sepehr system` فیک (دقت کنید: دارای فاصله) و یک
+دایرکتوری state mock تازه.
+
+</div>

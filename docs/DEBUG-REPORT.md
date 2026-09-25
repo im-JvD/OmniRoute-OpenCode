@@ -1,156 +1,175 @@
-# Debug Report
+<div align="tight" dir="rtl">
 
-Working log of the failures that actually occurred while bringing
-`omniroute-manager.sh` + the sandbox test harness to green, each with
-the root cause and the fix. Also includes the RAM/CPU budget used for
-the 8 GB / 4-core WSL2 target.
+# گزارش دیباگ
 
-## Real vs. simulated (short version)
+گزارش خطاهایی که واقعاً در مسیر سبز شدن
+`omniroute-manager.sh` و هارنس تست رخ داد، هرکدام با ریشه‌ای که
+پیدا شد و رفعی که روی آن انجام شد. بودجه RAM/CPU برای هدف
+8 GB / 4 هسته (WSL2) هم در انتها آمده است.
 
-The manager script, the mock OmniRoute HTTP server (real `node` on the
-real port 20128), `jq`, `git`, `openssl`, and `bash` are **real**.
-`docker`, the Docker daemon, `apt-get`/`service`/`systemctl`,
-`powershell.exe`, `wslpath`, `npm`, and `pm2` are **mocks** under
-`tests/mock-bin*` because the sandbox is non-root Linux with none of
-those. Registry sanctions (403 from Docker Hub / `get.docker.com`) are
-simulated inside the mock `docker`. Full table in `TEST-SUMMARY.md`.
+## واقعی در برابر شبیه‌سازی (خلاصه)
 
-## Errors -> fixes
+اسکریپت مدیر، mock server HTTP OmniRoute (Node واقعی روی پورت
+واقعی 20128)، `jq`، `git`، `openssl` و `bash` **واقعی** هستند.
+`docker`، daemon Docker، `apt-get`/`service`/`systemctl`،
+`powershell.exe`، `wslpath`، `npm` و `pm2` **mock** هستند
+(`tests/mock-bin*`)، چون ساندباکس یک Linux غیر-root است و هیچ‌کدام از
+آن‌ها را ندارد. تحریم registry (403 از Docker Hub /
+`get.docker.com`) هم داخل mock `docker` شبیه‌سازی شده است. جدول کامل
+در `TEST-SUMMARY.md`.
 
-1. **`curl get.docker.com` returned 403 from Iran.**
-   Fix: never call it. Docker is installed via `apt-get install
-   docker.io` (Debian/Ubuntu ships the engine in the distro repo, which
-   is reachable). Assertions in T2 prove the URL is never contacted.
+## خطاها -> رفع‌ها
 
-2. **`set -euo pipefail` + `ERR` trap killed the script on any expected
-   failure** (e.g. `systemctl restart docker` -> "Unit not found" in a
-   systemd-less context). A plain failing statement aborts the whole
-   script.
-   Fix: every fallible command is wrapped - `if cmd; then ... fi`,
-   `cmd || fallback`, or a bounded `set +e ... set -e` block. The
-   systemd/service decision is made once at start (`systemd_active()`).
+1. **`curl get.docker.com` از ایران 403 برمی‌گشت.**
+   رفع: اصلاً صدا زده نمی‌شود. Docker با `apt-get install docker.io`
+   نصب می‌شود (انجین Docker در دپوی خود دبیان/اوبونتو هست و قابل
+   دسترسی است). assertionهای T2 ثابت می‌کنند آن URL هرگز خوانده
+   نمی‌شود.
 
-3. **Sudo quirk in this sandbox:** sudo escalates to uid 0, but root
-   could not write user-owned files (`tee` -> Permission denied).
-   Fix: files are written as the user, then `sudo mv`/`sudo install`
-   into privileged locations. The script's privilege helper is only
-   used for genuinely root paths (daemon.json, swap, apt).
+2. **`set -euo pipefail` + trap خطا، اسکریپت را روی هر شکستِ مورد
+   انتظار از پا درمی‌آورد** (مثلاً `systemctl restart docker` ->
+   "Unit not found" در محیطی بدون systemd). یک دستور ساده‌ای که شکست
+   بخورد، کل اسکریپت را می‌کشد.
+   رفع: هر دستور شکست‌پذیر داخل محاسبه‌ی امن بسته شده -
+   `if cmd; then ... fi`، `cmd || fallback`، یا بلاک محدود
+   `set +e ... set -e`. تصمیم systemd/`service` یک‌بار در شروع با
+   `systemd_active()` گرفته می‌شود.
 
-4. **Bash return-code bug:** `if cmd; then ...; fi; rc=$?` captures the
-   status of the `if` compound (0 on the false branch), *not* the
-   command's rc. This silently turned a mock 403 into "success".
-   Fix: capture with `cmd || rc=$?` (reproduced in isolation to confirm).
+3. **رفتار عجیب sudo در این ساندباکس:** sudo بدون پسورد به uid 0
+   می‌رود، ولی root نمی‌تواند روی فایل‌های مالِ کاربر بنویسد
+   (`tee` -> Permission denied).
+   رفع: فایل‌ها به‌عنوان کاربر نوشته می‌شوند و با `sudo mv` /
+   `sudo install` به محل‌های privileged منتقل می‌شوند. helper دسترسی
+   اسکریپت فقط برای مسیرهایی که واقعاً root می‌خواهند به کار می‌رود
+   (daemon.json، swap، apt).
 
-5. **`run_quiet` swallowed stdout in pipes.** `run_quiet` redirects
-   stdout to the log file, so `run_quiet DC ps | grep` and
-   `$(run_quiet ...)` captured nothing, which made the "container up"
-   and image checks fail.
-   Fix: use `DC ... 2>/dev/null` directly wherever output is piped or
-   substituted; keep `run_quiet` only for fire-and-forget steps.
+4. **باگ برداشت return code در bash:**
+   `if cmd; then ...; fi; rc=$?` وضعیتِ کل `if` را برمی‌گرداند
+   (در شاخه‌ی false برابر 0)، **نه** rc خود دستور. این باگ یک 403
+   mock را خاموش‌کردنی «موفق» می‌کرد.
+   رفع: برداشت با `cmd || rc=$?` (در انزوا بازتولید شد تا تأیید
+   شود).
 
-6. **Docker image marker mismatch.** The mock keys images by
-   `img-$(echo "$ref" | tr '/:' '__')`. The tag `omniroute-image:latest`
-   has no slash, so it maps to a **single** underscore
-   (`img-omniroute-image_latest`); the test assertions were written
-   with a double underscore and never matched.
-   Fix: corrected the assertions to the single-underscore form (verified
-   against direct `tr` output).
+5. **`run_quiet` در لوله (pipe) خروجی را قورت می‌داد.** چون
+   `run_quiet` خروجی استاندارد را به فایل لاگ می‌فرستد،
+   `run_quiet DC ps | grep` و `$(run_quiet ...)` چیزی برمی‌داشتند،
+   و چک «کان‌تینر بالاست» و چک imageها می‌شکست.
+   رفع: هرجا خروجی pipe یا جایگزینی می‌شود مستقیم
+   `DC ... 2>/dev/null` به کار می‌رود؛ `run_quiet` فقط برای گام‌های
+   آتش‌و-فرار می‌ماند.
 
-7. **`free_disk_mb` failed on a fresh clone target.** `df` on a
-   directory that does not exist yet returns nothing -> "0 MB free" ->
+6. **نام‌گذاری state از image در docker mock نخوانده بود.** mock
+   imageها را با `img-$(echo "$ref" | tr '/:' '__')` نگه می‌دارد؛
+   تگ `omniroute-image:latest` اسلش ندارد، پس به **تیریلک یک‌تایی**
+   تبدیل می‌شود (`img-omniroute-image_latest`)؛ assertionها با
+   تیریلک دوتایی نوشته شده بودند و هرگز نخواندند.
+   رفع: assertionها به شکل تیریلک یک‌تایی اصلاح شد (خروجی مستقیم
+   `tr` راستی‌آزمایی شد).
+
+7. **`free_disk_mb` روی مقصد clone تازه شکست می‌خورد.** `df` روی
+   دایرکتوری‌ای که هنوز وجود ندارد خروجی نمی‌دهد -> «0 MB خالی» ->
    `die`.
-   Fix: walk up to the nearest existing ancestor directory before `df`.
+   رفع: قبل از `df` تا نزدیک‌ترین دایرکتوری موجودِ والد بالا می‌رود.
 
-8. **Build command chosen after it was used** (ordering bug) and the
-   BuildKit line was not logged.
-   Fix: detect `buildx` first (`buildx build` vs classic `build` with
-   `DOCKER_BUILDKIT=1`), then log the exact builder + resource caps.
+8. **دستور build بعد از جایی که استفاده می‌شد انتخاب می‌شد**
+   (باگ ترتیب) و خط BuildKit لاگ نمی‌شد.
+   رفع: اول تشخیص `buildx` (`buildx build` یا build کلاسیک با
+   `DOCKER_BUILDKIT=1`)، سپس لاگ دقیق builder + سقف منابع.
 
-9. **Build failure was a hard `die`**, so the required "build OOM ->
-   Node fallback" path was unreachable.
-   Fix: `build_image_docker` now `return 1` (with an OOM hint if the
-   log shows one) and `acquire_runtime` falls back to Node mode. T10
-   verifies the install still exits 0.
+9. **شکست build یک `die` سخت بود**، یعنی مسیر الزامی «OOM در build
+   -> فول‌بک Node» در دسترس نبود.
+   رفع: `build_image_docker` حالا `return 1` می‌دهد (اگر در لاگ
+   اثر OOM باشد، با یک یادآوری) و `acquire_runtime` به حالت Node
+   فول‌بک می‌کند. T10 تأیید می‌کند install باز هم با خروجی 0 تمام
+   می‌شود.
 
-10. **`jq` pitfalls (twice):** (a) hyphenated keys like
-    `registry-mirrors` need quoting; (b) after `| {...}` the input `.` is
-    the *new* object, so earlier fields (`.id`) are lost - must bind
-    `.id as $id` before transforming.
-    Fix: quoted keys and value-binding in the daemon.json and model
-    jq programs.
+10. **دو تله‌ی `jq`:** (الف) کلیدهای خط‌فاحش‌دار مثل
+    `registry-mirrors` باید تیریلک داشته باشند؛ (ب) بعد از
+    `| {...}` ورودی `.` **اشیاء جدید** است، پس فیلدهای قبل (مثل
+    `.id`) گم می‌شوند - باید قبل از تبدیل با `.id as $id` نگه داشته
+    شوند.
+    رفع: تیریلک برای کلیدها و نگه‌داشتن مقدار در برنامه‌های jq برای
+    daemon.json و فهرست مدل‌ها.
 
-11. **`service <svc> <cmd>` argument order.** The first mock had the
-    service name and the verb swapped and silently exit 0'd.
-    Fix: mock takes `$1`=service, `$2`=command, mirroring the real CLI.
+11. **ترتیب آرگومان‌های `service <svc> <cmd>`.** mock اولیه نام
+    سرویس و فعل را جابه‌جا گرفته بود و خاموش‌کردنی با 0 خارج می‌شد.
+    رفع: mock مثل CLI واقعی `$1`=سرویس و `$2`=فعل می‌گیرد.
 
-12. **Node-mode pm2 status showed "stopped".** The mock `pm2 jlist`
-    derived the liveness path from the wrong pidfile basename (kept the
-    `pm2-` prefix).
-    Fix: strip the `pm2-` prefix; status is now `online`. T9 green.
+12. **وضعیت pm2 در حالت Node «stopped» می‌شد.** mock `pm2 jlist`
+    مسیر زنده بودن را از نام basenameِ pidfile اشتباه می‌ساخت
+    (پیشوند `pm2-` را نگه می‌داشت).
+    رفع: پیشوند `pm2-` خط می‌خورد؛ وضعیت حالا `online` است. T9 سبز.
 
-13. **Uninstall left the Node launcher behind.** `do_uninstall` removed
-    the pidfile but never `~/omniroute-run.sh`. (The earlier "pass" was
-    the harness crashing *before* that assertion ran.)
-    Fix: uninstall now removes the launcher and logs it.
+13. **uninstall لانسر حالت Node را جا می‌گذاشت.** `do_uninstall`
+    pidfile را پاک می‌کرد ولی `~/omniroute-run.sh` را نه. («سبز»
+    قبلی در واقع کرشِ هارنس **قبل از** اجرای آن assertion بود.)
+    رفع: uninstall حالا لانسر را هم حذف و لاگ می‌کند.
 
-14. **Harness `set -u` crashes from unbound positional params.**
-    `assert_grep ... <<<"$out"` passed the here-string as a *redirection*
-    (so `$3` was unset) and a description string contained a literal
-    `$2`. Both aborted the run.
-    Fix: pass output via `<(printf ...)` and fix the description to the
-    real variable.
+14. **کرشِ `set -u` هارنس به‌خاطر آرگومان‌های unbound.**
+    `assert_grep ... <<<"$out"` here-string را به‌عنوان
+    **redirection** می‌داد (پس `$3` unset بود) و یک رشته‌ی توضیحی
+    یک `$2` حقیقی داخل خودش داشت. هر دو کل اجرا را قطع می‌کردند.
+    رفع: ارسال خروجی با `<(printf ...)` و اصلاح رشته به متغیر
+    واقعی.
 
-15. **Env-var leakage across tests in one harness run.** T9 exported
-    `OMNIRoute_NO_DOCKER_BUILD=1` and key vars that leaked into T10/T11.
-    Fix: `common_env()` unsets the per-test knobs (and provider keys)
-    at the top of every test.
+15. **لرزش (leak) متغیرهای محیطی بین تست‌ها در یک اجرای هارنس.**
+    T9 متغیر `OMNIRoute_NO_DOCKER_BUILD=1` و کلیدهای provider را
+    export می‌کرد که به T10/T11 می‌چسبید.
+    رفع: `common_env()` در ابتدای هر تست کلیدهای خاص هر تست
+    (و کلیدهای provider) را unset می‌کند.
 
-16. **Interactive `read` would hang a non-TTY session.**
-    Fix: `prompt_line`/`prompt_yes_no` read from a bounded
-    `read -t 180`, fall back to the env var, then to the default, and
-    never block forever. T7 proves no hang (timeout-bounded) and T11
-    proves the interactive path works under a real pty.
+16. **`read` تعاملی، نشست non-TTY را hang می‌کرد.**
+    رفع: `prompt_line`/`prompt_yes_no` با `read -t 180` محدود،
+    فول‌بک به متغیر محیطی، بعد به مقدار پیش‌فرض؛ هیچ‌گاه تا ابد
+    منتظر نمی‌مانند. T7 ثابت می‌کند hang نیست (با timeout محدودشده)
+    و T11 ثابت می‌کند مسیر تعاملی زیر pty واقعی کار می‌کند.
 
-17. **Windows path with a space in the username** (`Sepehr system`)
-    broke unquoted expansions and a naive `cmd.exe` path lookup.
-    Fix: PowerShell `[Environment]::GetFolderPath('UserProfile')`
-    (never `cmd.exe`), quoted everywhere, and `wslpath` for the
-    `/mnt/c/...` conversion. T2/T11 exercise the spaced path.
+17. **مسیر ویندوز با فاصله در نام کاربر** (`Sepehr system`)
+    توسعه‌های بدون تیریلک را می‌شکست و یک path-lookup ساده با
+    `cmd.exe` جواب نمی‌داد.
+    رفع: PowerShell با
+    `[Environment]::GetFolderPath('UserProfile')` (هرگز `cmd.exe`)،
+    همه‌جا تیریلک‌دار، و `wslpath` برای تبدیل به `/mnt/c/...`.
+    T2/T11 مسیر دارای فاصله را تمرین می‌کنند.
 
-## RAM / CPU budget (8 GB RAM, 4-core target)
+## بودجه RAM / CPU (هدف: 8 GB RAM، 4 هسته)
 
-The upstream OmniRoute Dockerfile (v3.8.51) exposes build args
-`OMNIROUTE_BUILD_MEMORY_MB`, `OMNIROUTE_BUILD_WORKERS`, and
-`OMNIROUTE_USE_TURBOPACK`. CI builds on 16 GB runners with a 12288 MB
-heap; that is far too much once the Docker daemon and the host are
-subtracted from an 8 GB box. The script therefore budgets:
+Dockerfile بالادستی OmniRoute (v3.8.51) آرگومان‌های build
+`OMNIROUTE_BUILD_MEMORY_MB`، `OMNIROUTE_BUILD_WORKERS` و
+`OMNIROUTE_USE_TURBOPACK` را باز می‌گذارد. CI روی runnerهای 16 GB
+با heap 12288 MB build می‌کند؛ برای یک سیستم 8 GB که daemon Docker و
+خود هاست از آن کم شود، خیلی زیاد است. اسکریپت بنابراین اینگونه
+بودجه‌بندی می‌کند:
 
-| Host RAM | `--memory` | `--memory-swap` | build heap (`OMNIROUTE_BUILD_MEMORY_MB`) | workers (`OMNIROUTE_BUILD_WORKERS`) |
+| RAM هاست | `--memory` | `--memory-swap` | heap build (`OMNIROUTE_BUILD_MEMORY_MB`) | workerها (`OMNIROUTE_BUILD_WORKERS`) |
 |---|---|---|---|---|
-| >= 16 GB | 8g | 12g | 6144 | 4 |
-| else (the 8 GB case) | **6g** | **8g** | **4096** | **2** |
+| 16 GB یا بیشتر | 8g | 12g | 6144 | 4 |
+| غیر این (مورد 8 GB) | **6g** | **8g** | **4096** | **2** |
 
-- **6 g hard container cap** leaves ~2 GB for the host + Docker daemon
-  on an 8 GB WSL2 box.
-- **4096 MB JS heap** (via `OMNIROUTE_BUILD_MEMORY_MB`, which the
-  Dockerfile forwards to `NODE_OPTIONS --max-old-space-size`) keeps the
-  Next.js build inside the cap with headroom for native tools.
-- **2 build workers** (the Dockerfile default) halve peak memory vs 4.
-- **Webpack, not Turbopack** (`OMNIROUTE_USE_TURBOPACK=0`) - the
-  Dockerfile default and the safer choice under memory pressure.
-- A **swapfile is provisioned first** (WSL2 has none by default) when
-  swap is 0 and RAM < 12 GB, as the last line of defense.
-- If the build still OOMs, the script **falls back to Node mode**
-  (`npm i -g omniroute` + `omniroute serve` under pm2/nohup) instead of
-  failing the install (T10).
-- The **runtime** container runs with the image's own
-  `OMNIROUTE_MEMORY_MB=1024` (1 GB) - small on purpose; the heavy work
-  is provider calls, not local compute.
+- **سقف سخت 6g برای کان‌تینر** روی سیستم 8 GB حدود 2 GB برای هاست +
+  daemon Docker می‌گذارد.
+- **heap JS 4096 MB** (از طریق `OMNIROUTE_BUILD_MEMORY_MB` که
+  Dockerfile آن را به `NODE_OPTIONS --max-old-space-size` می‌دهد) build
+  Next.js را با هوادار داخل سقف نگه می‌دارد.
+- **2 worker build** (همان پیش‌فرض Dockerfile) اوج حافظه را نسبت به
+  4 worker نصف می‌کند.
+- **Webpack، نه Turbopack** (`OMNIROUTE_USE_TURBOPACK=0`) - همان
+  پیش‌فرض Dockerfile و انتخاب امن‌تر تحت فشار حافظه.
+- **swapfile اول از همه provision می‌شود** (WSL2 به‌طور پیش‌فرض swap
+  ندارد) وقتی swap صفر و RAM زیر 12 GB باشد؛ خط دفاعی آخر.
+- اگر build باز هم OOM شد، اسکریپت **فول‌بک به حالت Node**
+  (`npm i -g omniroute` + `omniroute serve` زیر pm2/nohup) می‌کند
+  به‌جای شکست دادن کل install (T10).
+- **کان‌تینر runtime** با همان `OMNIROUTE_MEMORY_MB=1024` خودِ image
+  (1 GB) کار می‌کند - عمداً کوچک؛ کار سنگین فراخوانی providerهاست،
+  نه محاسبه‌ی محلی.
 
-CPU: the 4-core box gets `workers=2` during build (deliberate
-under-subscription to keep the OOM budget honest); the runtime service
-is CPU-unconstrained (I/O bound).
+CPU: سیستم 4 هسته‌ای در زمان build 2 worker می‌گیرد (کم‌تعدادی
+عمدی تا بودجه OOM صادق بماند)؛ سرویس runtime از نظر CPU آزاد است
+(به I/O بسته است).
 
-Disk: `build_image_docker` refuses to start unless ~12 GB is free
-(`free_disk_mb` walks to an existing ancestor so a fresh clone target
-is measured correctly).
+دیسک: `build_image_docker` مگر آنکه حدود 12 GB خالی باشد شروع نمی‌شود
+(`free_disk_mb` تا یک والد موجود بالا می‌رود تا مقصد clone تازه هم
+درست اندازه گرفته شود).
+
+</div>
