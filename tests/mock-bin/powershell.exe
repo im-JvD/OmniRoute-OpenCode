@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Mock powershell.exe (as seen from WSL). Prints the Windows user profile
+# with CRLF, like the real thing does. Username intentionally contains a
+# SPACE to exercise that known issue.
+# Override with MOCK_WIN_PROFILE.
+printf '%s\r\n' "${MOCK_WIN_PROFILE:-C:\\Users\\Sepehr system}"

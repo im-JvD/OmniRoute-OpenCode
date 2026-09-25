@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Mock `node` passthrough is NOT needed (real node exists in the sandbox).
+# This file exists so tests/mock-bin-node is clearly Node-mode-only mocks.

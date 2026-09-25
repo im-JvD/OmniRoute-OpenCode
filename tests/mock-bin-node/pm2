@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Mock `pm2` (subset used by omniroute-manager.sh).
+#   pm2 start <script> --name <n> [--interpreter X] [--time]
+#   pm2 jlist
+#   pm2 delete <n>
+#   pm2 save | pm2 startup ... | pm2 restart <n>
+STATE="${MOCK_STATE:-/tmp/omniroute-mock-state}"
+mkdir -p "$STATE"
+
+alive() { [ -s "$STATE/pm2-$1.pid" ] && kill -0 "$(cat "$STATE/pm2-$1.pid")" 2>/dev/null; }
+
+case "${1:-}" in
+  start)
+    shift
+    script="" name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --interpreter|--time) [ "$1" = "--interpreter" ] && shift; shift ;;
+        *) [ -z "$script" ] && script="$1"; shift ;;
+      esac
+    done
+    [ -n "$script" ] || { echo "pm2: no script" >&2; exit 1; }
+    if [ -n "$name" ] && alive "$name"; then
+      echo "Process already started (mock)"
+      exit 0
+    fi
+    nohup bash "$script" >>"$STATE/pm2-${name:-unnamed}.log" 2>&1 &
+    echo $! >"$STATE/pm2-${name:-unnamed}.pid"
+    echo "[PM2] Starting in fork mode: $script (name=${name:-unnamed}) (mock)"
+    ;;
+  jlist)
+    first=1
+    echo -n "["
+    for pidfile in "$STATE"/pm2-*.pid; do
+      [ -f "$pidfile" ] || continue
+      n="$(basename "$pidfile" .pid)"
+      n="${n#pm2-}"
+      status="online"; alive "$n" || status="stopped"
+      [ $first -eq 1 ] || echo -n ","
+      first=0
+      printf '{"name":"%s","pm2_env":{"status":"%s"},"pid":%s}' "$n" "$status" "$(cat "$pidfile")"
+    done
+    echo "]"
+    ;;
+  delete)
+    name="${2:-}"
+    if [ -n "$name" ] && alive "$name"; then
+      kill "$(cat "$STATE/pm2-$name.pid")" 2>/dev/null || true
+    fi
+    rm -f "$STATE/pm2-$name.pid"
+    echo "[PM2] [omniroute]deleted (mock)"
+    ;;
+  restart)
+    name="${2:-}"
+    [ -n "$name" ] && alive "$name" && {
+      kill "$(cat "$STATE/pm2-$name.pid")" 2>/dev/null || true
+      sleep 0.2
+    }
+    echo "[PM2] restart (mock)"
+    ;;
+  save|startup)
+    echo "[PM2] $1 ok (mock)"
+    ;;
+  *)
+    echo "[PM2] unhandled: $1 (mock)"
+    ;;
+esac
+exit 0

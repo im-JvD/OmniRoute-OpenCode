@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Mock `git` for the build-fallback test. Supports:
+#   git clone --depth 1 --branch <b> <url> <dir>
+# Creates a minimal source tree (no network) so the (mock) docker build
+# has a context. Real network is avoided to keep the harness hermetic.
+set -u
+args=("$@")
+if [ "${1:-}" = "clone" ]; then
+  dir=""
+  depth1=0
+  branch=""
+  i=1
+  while [ $i -lt ${#args[@]} ]; do
+    a="${args[$i]}"
+    case "$a" in
+      --depth) depth1=1; i=$((i+2)) ;;
+      --branch) branch="${args[$((i+1))]}"; i=$((i+2)) ;;
+      *)
+        case "$a" in
+          -*) ;;
+          *) if [ -z "$dir" ] && [[ "$a" != https://* ]]; then :; else dir="$a"; fi ;;
+        esac
+        i=$((i+1)) ;;
+    esac
+  done
+  [ -n "$dir" ] || { echo "mock git clone: missing dir" >&2; exit 1; }
+  mkdir -p "$dir/.git"
+  echo "mock-clone $branch" >"$dir/.git/HEAD"
+  cat >"$dir/Dockerfile" <<'EOF'
+FROM node:26-trixie-slim
+LABEL mock=1
+CMD ["node", "server.js"]
+EOF
+  echo '{"name":"omniroute","version":"3.8.51-mock"}' >"$dir/package.json"
+  echo "mock git clone ok (depth1=$depth1 branch=$branch)"
+  exit 0
+fi
+# anything else: pass through to real git
+exec /usr/bin/git "$@"

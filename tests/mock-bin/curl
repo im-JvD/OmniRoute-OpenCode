@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Recording curl wrapper: logs every URL then forwards to the real curl.
+# Used to prove the manager never contacts sanctioned/blocked domains.
+STATE="${MOCK_STATE:-/tmp/omniroute-mock-state}"
+mkdir -p "$STATE"
+for a in "$@"; do
+  case "$a" in
+    http://*|https://*) echo "$a" >>"$STATE/curl-urls.log" ;;
+  esac
+done
+exec /usr/bin/curl "$@"
