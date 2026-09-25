@@ -14,6 +14,15 @@ log() { echo "[mock-docker] $*" >>"$STATE/docker.log"; }
 state() { [ -f "$STATE/$1" ] && cat "$STATE/$1" || echo ""; }
 
 cmd="${1:-}"; shift || true
+launch_mock_server() {
+  # $1 = container name; (re)launches the mock OmniRoute server.
+  local srv="${MOCK_SERVER:-$(dirname "$0")/../mock-omniroute/server.mjs}"
+  MOCK_STATE="$STATE" \
+    MOCK_ADMIN_PASSWORD="$(grep -E '^INITIAL_PASSWORD=' "$STATE/env-snapshot" 2>/dev/null | cut -d= -f2- || true)" \
+    MOCK_MASTER_KEY="$(grep -E '^OMNIROUTE_API_KEY=' "$STATE/env-snapshot" 2>/dev/null | cut -d= -f2- || true)" \
+    MOCK_CATALOG="${MOCK_CATALOG:-$(dirname "$0")/../mock-omniroute/catalog.json}" \
+    nohup node "$srv" >>"$STATE/server-$1.log" 2>&1 &
+}
 case "$cmd" in
   --version|version)
     echo "Docker version 27.5.1-mock, build sandbox"
@@ -120,13 +129,19 @@ case "$cmd" in
     name="$1"
     [ "$(state container-name)" = "$name" ] || { echo "mock: no such container" >&2; exit 1; }
     if [ ! -s "$STATE/server-$name.pid" ] || ! kill -0 "$(cat "$STATE/server-$name.pid")" 2>/dev/null; then
-      SERVER_BIN="${MOCK_SERVER:-$(dirname "$0")/../mock-omniroute/server.mjs}"
-      MOCK_STATE="$STATE" \
-        MOCK_ADMIN_PASSWORD="$(grep -E '^INITIAL_PASSWORD=' "$STATE/env-snapshot" 2>/dev/null | cut -d= -f2- || true)" \
-        MOCK_MASTER_KEY="$(grep -E '^OMNIROUTE_API_KEY=' "$STATE/env-snapshot" 2>/dev/null | cut -d= -f2- || true)" \
-        MOCK_CATALOG="${MOCK_CATALOG:-$(dirname "$0")/../mock-omniroute/catalog.json}" \
-        nohup node "$SERVER_BIN" >>"$STATE/server-$name.log" 2>&1 &
+      launch_mock_server "$name"
     fi
+    echo "running" >"$STATE/container"
+    echo "$name"
+    ;;
+  restart)
+    name="$1"
+    [ "$(state container-name)" = "$name" ] || { echo "mock: no such container" >&2; exit 1; }
+    if [ -f "$STATE/server-$name.pid" ]; then
+      kill "$(cat "$STATE/server-$name.pid")" 2>/dev/null || true
+      rm -f "$STATE/server-$name.pid"
+    fi
+    launch_mock_server "$name"
     echo "running" >"$STATE/container"
     echo "$name"
     ;;

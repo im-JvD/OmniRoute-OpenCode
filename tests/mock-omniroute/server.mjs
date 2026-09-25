@@ -117,6 +117,8 @@ const server = http.createServer((req, res) => {
   let catalog = [];
   try {
     catalog = JSON.parse(fs.readFileSync(CATALOG_FILE, "utf8"));
+    // Accept both a bare array and the real API shape { data: [...] }.
+    if (catalog && !Array.isArray(catalog)) catalog = catalog.data ?? [];
   } catch (e) {
     log("catalog load failed:", e.message);
   }

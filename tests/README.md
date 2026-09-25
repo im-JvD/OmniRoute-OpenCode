@@ -8,7 +8,7 @@
 OmniRoute با Node واقعی روی پورت 20128.
 
 ```bash
-bash run-tests.sh              # هر ۱۳ تست (T1 تا T13)
+bash run-tests.sh              # هر ۱۴ تست (T1 تا T14)
 bash run-tests.sh T2 T8 T11    # یک زیرمجموعه
 ```
 
@@ -23,7 +23,7 @@ bash run-tests.sh T2 T8 T11    # یک زیرمجموعه
 
 | مسیر | کاربرد |
 |---|---|
-| `run-tests.sh` | ۱۳ گروه تست (T1 تا T13)، helperهای assertion و پاکسازی state قبل از هر تست. |
+| `run-tests.sh` | ۱۴ گروه تست (T1 تا T14)، helperهای assertion و پاکسازی state قبل از هر تست. |
 | `mock-bin/docker` | mock از CLI و daemon Docker. state در `$MOCK_STATE`. 403 را برای pullهای `docker.io/*` و `diegosouzapw/*` شبیه‌سازی می‌کند، در `run` سرور mock را روی 20128 بالا می‌آورد و build را با موفقیت یا OOM (در صورت flag `force_build_oom`) شبیه‌سازی می‌کند. |
 | `mock-bin/service`، `mock-bin/powershell.exe`، `mock-bin/wslpath` | mock دستورات privileged / سمت ویندوز (start/stop daemon، `C:\Users\Sepehr system`، `/mnt/c`). |
 | `mock-bin/curl` | به curl واقعی forward می‌شود ولی هر URL را در `curl-urls.log` ثبت می‌کند (ثابت می‌کند `get.docker.com` هرگز خوانده نمی‌شود). |

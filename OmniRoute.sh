@@ -978,6 +978,9 @@ start_container() {
     --env-file "$ENV_FILE" \
     -e DATA_DIR=/app/data \
     "${IMAGE_NAME}:latest"
+  # Mode marker: lets the quick commands (omni up/down/...) tell which
+  # runtime manages OmniRoute on later invocations.
+  echo "docker" >"$DATA_DIR/mode"
 }
 
 write_node_launcher() {
@@ -990,6 +993,9 @@ write_node_launcher() {
   cat >"$tmp" <<LAUNCHER
 #!/usr/bin/env bash
 # Managed by omniroute-manager.sh (Node-mode launcher).
+# Pick up the user's PATH (npm global bin etc.) - matters when started
+# by a systemd unit at boot.
+if [ -f "$HOME/.profile" ]; then . "$HOME/.profile" 2>/dev/null || true; fi
 set -a
 . "$ENV_FILE"
 set +a
@@ -1032,6 +1038,8 @@ start_node_process() {
       echo $! >"$NODE_MODE_PID_FILE"
     )
   fi
+  # Mode marker (see start_container).
+  echo "node" >"$DATA_DIR/mode"
 }
 
 # ---------------------------------------------------------------------------
@@ -1219,17 +1227,20 @@ build_opencode_config() {
     }')"
   fi
 
-  local provider_json
-  provider_json="$(jq -n \
-    --arg baseURL "${BASE_URL}/v1" \
-    --arg apiKey "$MASTER_KEY" \
-    --argjson models "$models_json" \
-    '{
+  # The live /v1/models catalog can be several MB - far beyond the 128 KB
+  # per-argument limit of `jq --argjson` (E2BIG: "Argument list too long").
+  # Every payload therefore travels through temp files, never argv.
+  local models_file provider_file base_file
+  models_file="$(make_tmp)"; provider_file="$(make_tmp)"; base_file="$(make_tmp)"
+  printf '%s' "$models_json" >"$models_file"
+  jq --arg baseURL "${BASE_URL}/v1" \
+     --arg apiKey "$MASTER_KEY" \
+     '{
        name: "OmniRoute",
        npm: "@ai-sdk/openai-compatible",
        options: { baseURL: $baseURL, apiKey: $apiKey },
-       models: $models
-     }')"
+       models: .
+     }' "$models_file" >"$provider_file"
 
   # --- choose the default model from the live catalog ---
   local default_model="" m
@@ -1245,28 +1256,26 @@ build_opencode_config() {
   log "Default OpenCode model: omniroute/$default_model"
 
   # --- merge with any existing config (preserve other providers/keys) ---
-  local base_obj
+  # The existing config also goes through a file (it can be large too).
   if [ -f "$config_path" ]; then
     if jq -e . "$config_path" >/dev/null 2>&1; then
-      base_obj="$(jq . "$config_path")"
+      jq . "$config_path" >"$base_file"
     else
       local bak="${config_path}.bak-$(date +%Y%m%d%H%M%S)"
       warn "Existing $config_path is not valid JSON - backing up to $bak and writing a clean file."
       cp "$config_path" "$bak" 2>/dev/null || true
-      base_obj='{}'
+      printf '{}\n' >"$base_file"
     fi
   else
-    base_obj='{}'
+    printf '{}\n' >"$base_file"
   fi
 
-  local final_json
-  final_json="$(jq -n \
-    --argjson base "$base_obj" \
-    --argjson provider "$provider_json" \
-    --arg defaultModel "omniroute/$default_model" \
-    '
-      $base
-      | . as $b
+  # -s slurps both files: .[0] = base, .[1] = provider.
+  local tmp
+  tmp="$(make_tmp)"
+  jq -s --arg defaultModel "omniroute/$default_model" '
+      .[0] as $base | .[1] as $provider
+      | $base as $b
       | ($b | if has("$schema") then . else . + {"$schema": "https://opencode.ai/config.json"} end)
       | .provider = (($b.provider // {}) + {"omniroute": $provider})
       # Keep an existing top-level model unless it is empty or already points
@@ -1276,11 +1285,7 @@ build_opencode_config() {
           elif ($b.model | startswith("omniroute/")) then $defaultModel
           else $b.model
           end)
-    ')"
-
-  local tmp
-  tmp="$(make_tmp)"
-  printf '%s\n' "$final_json" >"$tmp"
+    ' "$base_file" "$provider_file" >"$tmp"
   jq -e . "$tmp" >/dev/null || die "Internal error: generated opencode.json is invalid."
   mv "$tmp" "$config_path"
   chmod 644 "$config_path"
@@ -1452,6 +1457,14 @@ print_success_banner() {
   2. Select provider: 'omniroute'
   3. Choose a model and start coding
 
+  Quick Commands (installed as 'omni'):
+    omni status    # state + health
+    omni up        # start the service
+    omni down      # stop the service
+    omni restart   # restart the service
+    omni logs      # last 50 log lines (omni logs f = follow)
+    omni uninstall # full removal
+
   Useful Commands:
     ${svc_cmds}     # View logs
     ${svc_cmd2}     # Restart service
@@ -1465,6 +1478,252 @@ print_success_banner() {
     dashboard under Settings -> Providers.
 ============================================================
 EOF
+}
+
+# ---------------------------------------------------------------------------
+# 13b. Quick management (omni up / down / restart / status / logs)
+# ---------------------------------------------------------------------------
+manage_service() {
+  local op="$1" logs_arg="${2:-}"
+  log "########## OmniRoute manage: $op (manager v${SCRIPT_VERSION}) ##########"
+  detect_environment
+  resolve_sudo
+
+  # Detect the managed runtime: mode marker first, then live detection.
+  local mode_file="$DATA_DIR/mode" mode=""
+  if [ -f "$mode_file" ]; then
+    mode="$(tr -d '[:space:]' <"$mode_file" 2>/dev/null || true)"
+  fi
+  if [ -z "$mode" ] && command -v docker >/dev/null 2>&1; then
+    if DC ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+      mode="docker"
+    fi
+  fi
+  if [ -z "$mode" ] && [ -f "$HOME/omniroute-run.sh" ]; then
+    mode="node"
+  fi
+  [ -n "$mode" ] || die "No OmniRoute installation found (marker $mode_file missing). Run the install first."
+  log "Detected mode: $mode"
+
+  local container_up=0
+  if [ "$mode" = "docker" ]; then
+    if DC ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+      container_up=1
+    fi
+  fi
+
+  case "$mode:$op" in
+    docker:up)
+      if [ "$container_up" = "1" ]; then
+        log "Container $CONTAINER_NAME is already up."
+      else
+        DC start "$CONTAINER_NAME" >>"$LOG_FILE" 2>&1 || die "docker start failed (see $LOG_FILE)."
+        log "Container $CONTAINER_NAME started."
+      fi
+      ;;
+    docker:down)
+      DC stop "$CONTAINER_NAME" >>"$LOG_FILE" 2>&1 || warn "Container was not running."
+      log "Container stopped (image kept; 'omni up' starts it again)."
+      ;;
+    docker:restart)
+      DC restart "$CONTAINER_NAME" >>"$LOG_FILE" 2>&1 || die "docker restart failed (see $LOG_FILE)."
+      log "Container restarted."
+      ;;
+    docker:status)
+      echo "OmniRoute mode:   docker (container $CONTAINER_NAME: $([ "$container_up" = "1" ] && echo running || echo stopped))"
+      echo "Service URL:      $BASE_URL/v1"
+      if curl -fsS --max-time 5 "$BASE_URL/healthz" >/dev/null 2>&1; then
+        echo "Health:           OK"
+      else
+        echo "Health:           NOT reachable at $BASE_URL/healthz"
+      fi
+      ;;
+    docker:logs)
+      if [ "$logs_arg" = "f" ] || [ "$logs_arg" = "--follow" ]; then
+        exec DC logs -f "$CONTAINER_NAME"
+      fi
+      DC logs --tail "${logs_arg:-50}" "$CONTAINER_NAME" 2>&1 | tail -n "${logs_arg:-50}"
+      ;;
+    node:up)
+      if command -v pm2 >/dev/null 2>&1; then
+        if pm2 jlist 2>/dev/null | jq -e '.[] | select(.name=="omniroute" and .pm2_env.status=="online")' >/dev/null 2>&1; then
+          log "omniroute is already online in pm2."
+        else
+          pm2 start omniroute >>"$LOG_FILE" 2>&1 \
+            || pm2 start "$HOME/omniroute-run.sh" --name omniroute --interpreter bash --time >>"$LOG_FILE" 2>&1 \
+            || die "pm2 start failed (see $LOG_FILE)."
+          log "omniroute started via pm2."
+        fi
+      else
+        nohup "$HOME/omniroute-run.sh" >>"$DATA_DIR/omniroute-node.log" 2>&1 &
+        echo $! >"$NODE_MODE_PID_FILE"
+        log "omniroute started via nohup (pid $(cat "$NODE_MODE_PID_FILE"))."
+      fi
+      ;;
+    node:down)
+      if command -v pm2 >/dev/null 2>&1; then
+        pm2 stop omniroute >>"$LOG_FILE" 2>&1 || true
+      fi
+      if [ -f "$NODE_MODE_PID_FILE" ]; then
+        kill "$(cat "$NODE_MODE_PID_FILE" 2>/dev/null)" 2>/dev/null || true
+      fi
+      log "omniroute stopped."
+      ;;
+    node:restart)
+      if command -v pm2 >/dev/null 2>&1; then
+        pm2 restart omniroute >>"$LOG_FILE" 2>&1 || die "pm2 restart failed (see $LOG_FILE)."
+        log "omniroute restarted via pm2."
+      else
+        manage_service "down"
+        manage_service "up"
+      fi
+      ;;
+    node:status)
+      local st="stopped"
+      if command -v pm2 >/dev/null 2>&1 && \
+         pm2 jlist 2>/dev/null | jq -e '.[] | select(.name=="omniroute" and .pm2_env.status=="online")' >/dev/null 2>&1; then
+        st="online (pm2)"
+      fi
+      echo "OmniRoute mode:   node ($st)"
+      echo "Service URL:      $BASE_URL/v1"
+      if curl -fsS --max-time 5 "$BASE_URL/healthz" >/dev/null 2>&1; then
+        echo "Health:           OK"
+      else
+        echo "Health:           NOT reachable at $BASE_URL/healthz"
+      fi
+      ;;
+    node:logs)
+      if command -v pm2 >/dev/null 2>&1; then
+        if [ "$logs_arg" = "f" ] || [ "$logs_arg" = "--follow" ]; then
+          exec pm2 logs omniroute
+        fi
+        pm2 logs omniroute --nostream --lines "${logs_arg:-50}" 2>/dev/null \
+          || tail -n "${logs_arg:-50}" "$DATA_DIR/omniroute-node.log"
+      else
+        tail -n "${logs_arg:-50}" "$DATA_DIR/omniroute-node.log"
+      fi
+      ;;
+    *)
+      die "Unknown manage operation: $op"
+      ;;
+  esac
+  log "########## OmniRoute manage: $op finished ##########"
+}
+
+# ---------------------------------------------------------------------------
+# 13c. Boot autostart (systemd)
+# ---------------------------------------------------------------------------
+configure_autostart() {
+  if ! systemd_active; then
+    warn "systemd is not active - skipping boot autostart."
+    warn "The service will not start when WSL reboots. Enable systemd in"
+    warn "/etc/wsl.conf ([boot] systemd=true) and re-run the install."
+    return 0
+  fi
+  if [ "$RUN_MODE" = "docker" ]; then
+    # Containers run with --restart unless-stopped; enabling the docker
+    # service brings the daemon (and thus the container) up on WSL boot.
+    if $SUDO systemctl enable docker >>"$LOG_FILE" 2>&1; then
+      log "Docker service enabled at boot (container auto-starts with it)."
+    else
+      warn "Could not enable docker.service - start Docker manually after WSL reboot."
+    fi
+  else
+    local unit_dir="$HOME/.config/systemd/user"
+    local unit_file="$unit_dir/omniroute.service"
+    mkdir -p "$unit_dir"
+    cat >"$unit_file" <<UNIT
+[Unit]
+Description=OmniRoute (Node mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/omniroute-run.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+    if systemctl --user daemon-reload >>"$LOG_FILE" 2>&1 \
+       && systemctl --user enable omniroute.service >>"$LOG_FILE" 2>&1; then
+      log "systemd user unit 'omniroute' enabled (Node-mode boot autostart)."
+      if ! loginctl show-user "$USER" 2>/dev/null | grep -q "Linger=yes"; then
+        if $SUDO loginctl enable-linger "$USER" >>"$LOG_FILE" 2>&1; then
+          log "Login linger enabled - the unit starts at boot without a login."
+        else
+          warn "Run once for boot autostart: sudo loginctl enable-linger $USER"
+        fi
+      fi
+    else
+      warn "Could not enable the systemd user unit. Start manually: bash $HOME/omniroute-run.sh"
+    fi
+  fi
+}
+
+remove_autostart() {
+  local unit_file="$HOME/.config/systemd/user/omniroute.service"
+  if [ -f "$unit_file" ]; then
+    systemctl --user disable omniroute.service >/dev/null 2>&1 || true
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    rm -f "$unit_file"
+    log "Removed systemd user unit: omniroute.service"
+  fi
+  # docker.service stays enabled (it is a system service, not ours).
+}
+
+# ---------------------------------------------------------------------------
+# 13d. Quick management command (omni)
+# ---------------------------------------------------------------------------
+OMNI_CMD_PATH=""
+install_omni_shim() {
+  local target="/usr/local/bin/omni"
+  local tmp
+  tmp="$(make_tmp)"
+  cat >"$tmp" <<SHIM
+#!/usr/bin/env bash
+# OmniRoute quick management (generated by OmniRoute.sh v${SCRIPT_VERSION}).
+MANAGER="${SCRIPT_PATH}"
+cmd="\${1:-status}"
+[ "\$#" -gt 0 ] && shift
+case "\$cmd" in
+  up|start)       exec bash "\$MANAGER" --up "\$@" ;;
+  down|stop)      exec bash "\$MANAGER" --down "\$@" ;;
+  restart)        exec bash "\$MANAGER" --restart "\$@" ;;
+  status)         exec bash "\$MANAGER" --status "\$@" ;;
+  logs)           exec bash "\$MANAGER" --logs "\$@" ;;
+  install)        exec bash "\$MANAGER" --install "\$@" ;;
+  uninstall)      exec bash "\$MANAGER" --uninstall "\$@" ;;
+  help|--help|-h) echo "Usage: omni {up|down|restart|status|logs [N|f]|install|uninstall}" ;;
+  *) echo "Unknown command: \$cmd (try: omni help)" >&2; exit 2 ;;
+esac
+SHIM
+  chmod 755 "$tmp"
+  if [ "$(id -u)" -eq 0 ]; then
+    mv "$tmp" "$target"
+  elif $SUDO mv "$tmp" "$target" 2>/dev/null && $SUDO chmod 755 "$target" 2>/dev/null; then
+    :
+  else
+    target="$HOME/.local/bin/omni"
+    mkdir -p "$(dirname "$target")"
+    mv "$tmp" "$target"
+    warn "$target installed. Make sure ~/.local/bin is in your PATH, e.g.:"
+    warn '  export PATH="$HOME/.local/bin:$PATH"'
+  fi
+  OMNI_CMD_PATH="$target"
+  log "Quick management command installed: $target  (omni up | down | restart | status | logs | uninstall)"
+}
+
+remove_omni_shim() {
+  local p
+  for p in /usr/local/bin/omni "$HOME/.local/bin/omni"; do
+    if [ -e "$p" ] || [ -L "$p" ]; then
+      if $SUDO rm -f "$p" 2>/dev/null || rm -f "$p" 2>/dev/null; then
+        log "Removed quick command: $p"
+      fi
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -1487,9 +1746,14 @@ do_install() {
   wait_for_health
   register_provider_keys
   detect_opencode_dir
-  fetch_catalog
+  # Advisory step: on failure the built-in model list is used. The function
+  # returns 1 when the live catalog is unavailable, so keep set -e from
+  # treating that (expected) outcome as fatal.
+  fetch_catalog || true
   build_opencode_config
   run_verification
+  configure_autostart
+  install_omni_shim
   print_success_banner
   log "########## OmniRoute install finished ##########"
 }
@@ -1562,6 +1826,9 @@ do_uninstall() {
     rm -f "$HOME/omniroute-run.sh"
     log "Removed Node-mode launcher: $HOME/omniroute-run.sh"
   fi
+  # 3b) Autostart + quick command.
+  remove_autostart
+  remove_omni_shim
 
   # 4) Source + data + secrets.
   log "Removing source: $SRC_DIR"
@@ -1620,11 +1887,13 @@ usage() {
 OmniRoute + OpenCode manager (v1.0.0)
 
 Usage:
-  bash omniroute-manager.sh               interactive menu (TTY required)
-  bash omniroute-manager.sh --install     run the full install
-  bash omniroute-manager.sh --uninstall   run the full uninstall
+  bash OmniRoute.sh               interactive menu (TTY required)
+  bash OmniRoute.sh --install     run the full install
+  bash OmniRoute.sh --uninstall   run the full uninstall
       --yes                               assume confirmation for uninstall
       --remove-docker                     also remove Docker itself (uninstall)
+  bash OmniRoute.sh --up|--down|--restart|--status|--logs [N|f]
+                                      quick management (also: omni up|...)
       --help                              this text
 
 Environment overrides: OMNIRoute_PORT, OMNIRoute_API_PORT, OMNIRoute_BIND_HOST,
@@ -1641,6 +1910,17 @@ parse_args() {
     case "$1" in
       --install) MODE="install" ;;
       --uninstall) MODE="uninstall" ;;
+      --up|--start) MODE="up" ;;
+      --down|--stop) MODE="down" ;;
+      --restart) MODE="restart" ;;
+      --status) MODE="status" ;;
+      --logs)
+        MODE="logs"
+        if [ -n "${2:-}" ] && [ "${2:0:1}" != "-" ]; then
+          LOGS_OPT="$2"
+          shift
+        fi
+        ;;
       --yes|-y) ASSUME_YES=1 ;;
       --remove-docker) REMOVE_DOCKER=1 ;;
       --help|-h) usage; exit 0 ;;
@@ -1685,6 +1965,7 @@ main() {
   case "$MODE" in
     install) do_install ;;
     uninstall) do_uninstall ;;
+    up|down|restart|status|logs) manage_service "$MODE" "${LOGS_OPT:-}" ;;
   esac
 }
 

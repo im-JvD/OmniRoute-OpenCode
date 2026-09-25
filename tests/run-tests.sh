@@ -141,6 +141,9 @@ test_T2_install_e2e() {
   assert_not_grep "never contacted get.docker.com" "get.docker.com" "$MOCK_STATE/curl-urls.log"
   assert_not_grep "never contacted registry-1.docker.io" "registry-1.docker.io" "$MOCK_STATE/curl-urls.log"
   assert "pre-built image pulled from GHCR" grep -q "pull ghcr.io/diegosouzapw/omniroute:latest" "$MOCK_STATE/docker.log"
+  assert "omni quick command installed" test -x /usr/local/bin/omni
+  assert "banner shows master key" grep -qE "API Key: +sk-omni-[0-9a-f]{32}" "$log"
+  assert "banner shows dashboard password" grep -q "Dashboard:.*password" "$log"
 }
 
 # Self-contained: reset, install once (default docker path).
@@ -196,6 +199,8 @@ test_T5_uninstall() {
   assert "opencode.json deleted" test ! -f "$cfg"
   assert "mock server process stopped" bash -c '! curl -fsS --max-time 2 http://127.0.0.1:20128/healthz'
   assert_grep "uninstall logged" "uninstall finished" "$TESTROOT/home/omniroute-install.log"
+  assert "omni quick command removed" \
+    bash -c '! test -e /usr/local/bin/omni && ! test -e "$HOME/.local/bin/omni"'
 }
 
 test_T6_no_keys_abort() {
@@ -369,6 +374,51 @@ test_T13_piped_stdin_tty() {
   bash "$SCRIPT" --uninstall --yes < /dev/null >>"$TESTROOT/tty-uninstall.log" 2>&1 || true
 }
 
+test_T14_big_catalog_and_manage() {
+  say "== T14: 3000-model catalog (jq argv E2BIG regression) + manage ops =="
+  reset_state; common_env
+  export PATH="$HERE/mock-bin:$PATH"
+  export OMNIRoute_GROQ_KEY="gsk_test"
+  # 3000 models (~350 KB) - beyond the 128 KB per-argument limit that broke
+  # `jq --argjson models "$json"` on real (multi-MB) catalogs.
+  local bigcat="$TESTROOT/big-catalog.json"
+  jq -n '{data: [ range(0; 3000) | {id: ("model-" + tostring), name: ("Model " + tostring), context_length: 131072, max_output_tokens: 8192} ]}' >"$bigcat"
+  export MOCK_CATALOG="$bigcat"
+  local rc
+  run_mgr --install; rc=$?
+  mkcfg
+  assert "install with 3000-model catalog exited 0 (rc=$rc)" test "$rc" -eq 0
+  assert "opencode.json carries all 3000 models" \
+    test "$(jq '.provider.omniroute.models | length' "$CFG")" = "3000"
+  assert "mode marker written (docker)" test "$(cat "$HOME/omniroute-data/mode" 2>/dev/null)" = "docker"
+  # --- manage ops via the manager flags ---
+  bash "$SCRIPT" --status < /dev/null >"$TESTROOT/manage-status.log" 2>&1; rc=$?
+  assert "manage --status exited 0 (rc=$rc)" test "$rc" -eq 0
+  assert_grep "status shows container running" "omniroute-app: running" "$TESTROOT/manage-status.log"
+  assert_grep "status shows health OK" "Health: +OK" "$TESTROOT/manage-status.log"
+  bash "$SCRIPT" --down < /dev/null >"$TESTROOT/manage-down.log" 2>&1; rc=$?
+  assert "manage --down exited 0 (rc=$rc)" test "$rc" -eq 0
+  assert "container stopped (mock state)" test "$(cat "$MOCK_STATE/container" 2>/dev/null)" = "stopped"
+  bash "$SCRIPT" --up < /dev/null >"$TESTROOT/manage-up.log" 2>&1; rc=$?
+  assert "manage --up exited 0 (rc=$rc)" test "$rc" -eq 0
+  sleep 1
+  assert "healthz OK after up" bash -c "curl -fsS --max-time 5 http://127.0.0.1:20128/healthz"
+  bash "$SCRIPT" --restart < /dev/null >"$TESTROOT/manage-restart.log" 2>&1; rc=$?
+  assert "manage --restart exited 0 (rc=$rc)" test "$rc" -eq 0
+  sleep 1
+  assert "healthz OK after restart" bash -c "curl -fsS --max-time 5 http://127.0.0.1:20128/healthz"
+  bash "$SCRIPT" --logs 5 < /dev/null >"$TESTROOT/manage-logs.log" 2>&1; rc=$?
+  assert "manage --logs exited 0 (rc=$rc)" test "$rc" -eq 0
+  # --- omni shim dispatch ---
+  /usr/local/bin/omni status >"$TESTROOT/omni-status.log" 2>&1; rc=$?
+  assert "omni status via shim (rc=$rc)" test "$rc" -eq 0
+  assert_grep "shim status shows running" "omniroute-app: running" "$TESTROOT/omni-status.log"
+  # --- uninstall cleanup ---
+  bash "$SCRIPT" --uninstall --yes < /dev/null >"$TESTROOT/manage-uninstall.log" 2>&1; rc=$?
+  assert "uninstall after manage exited 0 (rc=$rc)" test "$rc" -eq 0
+  assert "omni shim removed by uninstall" test ! -e /usr/local/bin/omni
+}
+
 # ---------------------------------------------------------------------------
 run_test() {
   case "$1" in
@@ -385,11 +435,12 @@ run_test() {
     T11) test_T11_interactive_tty ;;
     T12) test_T12_preserve_other_providers ;;
     T13) test_T13_piped_stdin_tty ;;
+    T14) test_T14_big_catalog_and_manage ;;
     *) say "unknown test $1" ;;
   esac
 }
 
-SELECTED="${*:-T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13}"
+SELECTED="${*:-T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14}"
 say "OmniRoute manager test harness"
 say "Script: $SCRIPT"
 say "Tests : $SELECTED"

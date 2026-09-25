@@ -94,14 +94,41 @@ git clone --depth 1 https://github.com/im-JvD/OmniRoute-OpenCode && bash OmniRou
    `/healthz` با ۱۰ بار تلاش و ۳ ثانیه، `/v1/models` با Bearer، یک
    chat completion واقعی، JSON سالم بودن opencode.json) - هرکدام
    PASS/FAIL.
-8. بنر موفقیت پایانی: URL، کلید اصلی، مسیر پیکربندی، مسیر لاگ،
-   تعداد مدل‌ها، وضعیت providerها، گام‌های بعدی و دستورات مفید.
+8. **آغازکار خودکار با بوت**: در حالت Docker، سرویس docker با
+   `systemctl enable` فعال می‌شود (کان‌تینر با سیاست
+   `--restart unless-stopped` با بوت WSL بالا می‌آید)؛ در حالت Node،
+   یونیت systemd کاربر `omniroute` با `Restart=always` ساخته و
+   enable می‌شود (+ `loginctl enable-linger`).
+9. **دستور مدیریت سریع `omni`** در `/usr/local/bin/omni` (یا
+   `~/.local/bin/omni`) ساخته می‌شود: `omni up | down | restart |
+   status | logs | uninstall`.
+10. بنر موفقیت پایانی: URL، **کلید اصلی (API Key) و پسورد پنل
+   داشبورد**، مسیر پیکربندی، مسیر لاگ، تعداد مدل‌ها، وضعیت
+   providerها، گام‌های بعدی و دستورات مفید.
+
+## دستورات مدیریت سریع (omni)
+
+بعد از نصب، یک دستور `omni` در PATH ساخته می‌شود:
+
+```bash
+omni status     # وضعیت کان‌تینر/پروسه + سلامت (healthz)
+omni up         # شروع سرویس
+omni down       # توقف سرویس (image/پیکربندی دست‌نخورده)
+omni restart    # ریستارت سرویس
+omni logs       # ۵۰ خط آخر لاگ (omni logs f = پیگیری زنده)
+omni install    # اجرای دوباره‌ی نصب (idempotent)
+omni uninstall  # حذف کامل
+```
+
+همان عملیات‌ها را می‌شود مستقیم با خود اسکریپت هم زد:
+`bash OmniRoute.sh --up | --down | --restart | --status | --logs [N|f]`
 
 ## «Full Uninstall» چه کارهایی انجام می‌دهد
 
 کان‌تینر و image را متوقف و حذف می‌کند، دایرکتوری `~/omniroute`،
-دایرکتوری دیتا، فایل‌های کلیدها و لانسر حالت Node را پاک می‌کند و
-(با تأیید کاربر) پیکربندی OpenCode و خود Docker را هم حذف می‌کند.
+دایرکتوری دیتا، فایل‌های کلیدها و لانسر حالت Node را پاک می‌کند،
+یونیت systemd و دستور `omni` را هم حذف می‌کند و (با تأیید کاربر)
+پیکربندی OpenCode و خود Docker را هم حذف می‌کند.
 همه‌چیز در لاگ ثبت می‌شود.
 
 ## idempotent بودن
@@ -129,7 +156,7 @@ overrideهای `OMNIRoute_*` برای تست و کاربردهای پیشرفت�
 پورت 20128).
 
 ```bash
-bash tests/run-tests.sh        # T1 تا T13 - در حال حاضر 81/81 سبز
+bash tests/run-tests.sh        # T1 تا T14 - در حال حاضر 102/102 سبز
 ```
 
 جدول «واقعی در برابر شبیه‌سازی» را در
