@@ -38,6 +38,10 @@ common_env() {
   unset OMNIRoute_NO_DOCKER_BUILD OMNIRoute_IMAGE_GHCR OMNIRoute_IMAGE_HUB
   unset OMNIRoute_GROQ_KEY OMNIRoute_OPENROUTER_KEY OMNIRoute_GEMINI_KEY
   unset OMNIRoute_CEREBRAS_KEY OMNIRoute_MISTRAL_KEY
+  unset OMNIRoute_PULL_TIMEOUT OMNIRoute_SKIP_PROBE OMNIRoute_FORCE_NO_TTY
+  # The pre-pull ghcr.io probe is a REAL network call - skip it so tests
+  # stay hermetic (the mock docker decides pull success/failure).
+  export OMNIRoute_SKIP_PROBE=1
   # This sandbox CAN have a controlling terminal (so /dev/tty would look
   # "interactive"). Force the non-TTY path for every test unless a test
   # explicitly unsets this (T11/T13 run under a real pty via script(1)).

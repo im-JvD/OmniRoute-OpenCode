@@ -112,6 +112,13 @@ DAEMON_JSON="${OMNIRoute_DAEMON_JSON:-/etc/docker/daemon.json}"
 MNT_ROOT="${OMNIRoute_MNT_ROOT:-/mnt}"
 NODE_MODE_PID_FILE="$HOME/.omniroute-node.pid"
 
+# A registry that is blocked but looks alive can make `docker pull` hang
+# for a very long time with zero output. Every pull therefore gets a hard
+# timeout plus periodic heartbeat logs; OMNIRoute_PULL_TIMEOUT seconds.
+PULL_TIMEOUT="${OMNIRoute_PULL_TIMEOUT:-900}"
+# OMNIRoute_SKIP_PROBE=1 disables the pre-pull reachability probe (tests).
+SKIP_PROBE="${OMNIRoute_SKIP_PROBE:-0}"
+
 BASE_URL="http://127.0.0.1:${OMNIRoute_PORT}"
 
 # Provider ids as known by OmniRoute (src/shared/constants/providers).
@@ -597,17 +604,71 @@ collect_keys() {
 # ---------------------------------------------------------------------------
 # 7. OmniRoute image acquisition: pre-built (GHCR -> Hub) -> build -> node
 # ---------------------------------------------------------------------------
+# A registry answering 200/401 to its /v2/ endpoint is reachable (401 =
+# "unauthorized, present a token" = the server IS responding). Anything
+# else (000, timeout, TLS failure) = network-level block.
+registry_reachable() {
+  local url="$1" code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url" 2>/dev/null)" || code=000
+  case "$code" in
+    200|401) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 image_pull_attempt() {
   local ref="$1"
-  log "Trying to pull pre-built image: $ref"
-  if run_quiet DC pull "$ref"; then
+
+  # GHCR refs cannot use the daemon.json mirrors (mirrors only cover
+  # Docker Hub), so probe first: in many sanctioned networks github.com is
+  # open while ghcr.io is blocked/throttled, and a blind pull would sit
+  # there looking dead. Docker Hub refs are always attempted, because the
+  # daemon transparently falls back to the configured mirrors.
+  case "$ref" in
+    ghcr.io/*)
+      if [ "$SKIP_PROBE" != "1" ]; then
+        if registry_reachable "https://ghcr.io/v2/"; then
+          log "ghcr.io is reachable - attempting pull."
+        else
+          warn "ghcr.io not reachable from this network (probe failed)."
+          warn "Skipping $ref - there is no mirror fallback for GHCR."
+          return 1
+        fi
+      fi
+      ;;
+  esac
+
+  log "Trying to pull pre-built image: $ref (timeout: ${PULL_TIMEOUT}s)"
+  local out rc=0 waited=0
+  out="$(make_tmp)"
+  ( DC pull "$ref" >"$out" 2>&1 ) &
+  local pull_pid=$!
+
+  # Heartbeat + hard timeout: a slow-but-alive pull must never look hung.
+  while kill -0 "$pull_pid" 2>/dev/null; do
+    if [ "$waited" -ge "$PULL_TIMEOUT" ]; then
+      log "Pull timed out after ${PULL_TIMEOUT}s - cancelling (daemon aborts the transfer)."
+      kill "$pull_pid" 2>/dev/null || true
+      break
+    fi
+    sleep 5
+    waited=$((waited+5))
+    if [ $((waited % 30)) -eq 0 ]; then
+      log "Pull of $ref still in progress (${waited}s elapsed) - still waiting..."
+    fi
+  done
+  wait "$pull_pid" 2>/dev/null || rc=$?
+  # Surface the docker client output (progress lines / error) in the log.
+  [ -s "$out" ] && cat "$out" >>"$LOG_FILE" 2>/dev/null || true
+
+  if [ "$rc" -eq 0 ]; then
     run_quiet DC tag "$ref" "${IMAGE_NAME}:latest"
     log "Pulled and tagged as ${IMAGE_NAME}:latest"
     PREBUILT_REF="$ref"
     return 0
   fi
-  warn "Pull failed for $ref (expected for registry-1.docker.io in sanctioned"
-  warn "networks; mirrors in daemon.json are used automatically by the daemon)."
+  warn "Pull failed for $ref (rc=$rc) - timeout, sanctions 403, or registry error."
+  warn "For Docker Hub refs the daemon transparently uses the mirrors from daemon.json."
   return 1
 }
 

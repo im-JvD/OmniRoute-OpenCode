@@ -68,9 +68,13 @@ git clone --depth 1 https://github.com/im-JvD/OmniRoute-OpenCode && bash OmniRou
    `diegosouzapw/omniroute` از Docker Hub؛ اگر هر دو شکست بخورند
    (مثلاً تحریم/403) با `git clone --depth 1` سورس کپی می‌گیرد و
    محلی با BuildKit و سقف حافظه‌ای متناسب با هاست 8 GB / 4 هسته build
-   می‌کند. اگر build به OOM برخورد کند، فول‌بک به **حالت Node**
-   (`npm i -g omniroute` + اجرای `omniroute serve` زیر pm2) انجام
-   می‌شود.
+   می‌کند. هر pull یک **probe سریعِ درستی شبکه** (کمتر از 10 ثانیه
+   برای GHCR، چون آینه‌های daemon فقط Docker Hub را پوشش می‌دهند)،
+   **timeout سخت** (پیش‌فرض 15 دقیقه، با `OMNIRoute_PULL_TIMEOUT`
+   قابل تغییر) و **heartbeat** هر 30 ثانیه («still in progress
+   (Ns)») دارد تا هیچ‌وقت مثل یک هنگ به نظر نرسد. اگر build به OOM
+   برخورد کند، فول‌بک به **حالت Node** (`npm i -g omniroute` + اجرای
+   `omniroute serve` زیر pm2) انجام می‌شود.
 4. فایل `~/omniroute-data/.env` (حالت 600) با کلیدهای providerها و
    یک **کلید اصلی** تصادفی
    `OMNIROUTE_API_KEY=sk-omni-<16 hex>` تولید می‌شود.
