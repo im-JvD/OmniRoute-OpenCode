@@ -2,7 +2,7 @@
 
 # خلاصه تست‌های ساندباکس
 
-اسکریپت `OmniRoute` چگونه در این ساندباکس Linux راستی‌آزمایی شد:
+اسکریپت `OmniRoute.sh` چگونه در این ساندباکس Linux راستی‌آزمایی شد:
 Debian 12، کاربر غیر-root، **بدون** daemon Docker، **بدون** ویندوز،
 **بدون** WSL. چون ساندباکس نمی‌تواند محیط واقعی را اجرا کند، هارنس تست
 (`tests/run-tests.sh`) آن بخش‌هایی که به دسترسی root یا
@@ -22,7 +22,7 @@ bash run-tests.sh T2 T8      # اجرای یک زیرمجموعه
 
 | جزء | واقعی یا شبیه‌سازی | توضیح |
 |---|---|---|
-| خود اسکریپت `OmniRoute` | **واقعی** | بدون تغییر اجرا می‌شود؛ فقط محیط فیک است. |
+| خود اسکریپت `OmniRoute.sh` | **واقعی** | بدون تغییر اجرا می‌شود؛ فقط محیط فیک است. |
 | سرور HTTP OmniRoute | **مسیر واقعی کد** | `tests/mock-omniroute/server.mjs` یک سرور HTTP با Node است که قرارداد واقعی نسخه 3.8.51 را حرف می‌زند: `/healthz`، `/v1/models` (کاتالوگ ۱۲ مدل)، `/v1/chat/completions` (پاسخ echo با احراز هویت کلید اصلی)، ورود داشبورد + `POST /api/providers/bulk` برای ثبت provider. روی پورت واقعی 20128 گوش می‌دهد. |
 | `curl` | **واقعی** | `tests/mock-bin/curl` فقط URLها را در `curl-urls.log` ثبت کرده و به curl واقعی forward می‌کند؛ assertionها با آن ثابت می‌کنند اسکریپت هرگز `get.docker.com` / `registry-1.docker.io` را نمی‌خواند. |
 | `jq`، bash، git (clone در مسیر build)، openssl، node | **واقعی** | |

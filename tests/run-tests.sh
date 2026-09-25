@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test harness for OmniRoute (root script) (sandbox / isolated Docker testing).
+# Test harness for the root OmniRoute.sh script (sandbox / isolated Docker testing).
 #
 # Simulates the target WSL2 environment:
 #   - sanctioned network: registry-1.docker.io (docker.io refs) -> 403,
@@ -18,7 +18,7 @@ set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
-SCRIPT="$ROOT/OmniRoute"
+SCRIPT="$ROOT/OmniRoute.sh"
 TESTROOT="${TESTROOT:-/tmp/omniroute-mgr-tests}"
 PASS=0; FAIL=0; FAILED_NAMES=()
 

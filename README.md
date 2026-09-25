@@ -12,9 +12,9 @@
 ## فایل تکی
 
 ```bash
-bash OmniRoute            # منوی تعاملی (TTY)
-bash OmniRoute --install  # اجرای بدون نظارت (کلیدها از طریق متغیرهای محیطی)
-bash OmniRoute --uninstall
+bash OmniRoute.sh            # منوی تعاملی (TTY)
+bash OmniRoute.sh --install  # اجرای بدون نظارت (کلیدها از طریق متغیرهای محیطی)
+bash OmniRoute.sh --uninstall
 ```
 
 * منو دقیقاً دو گزینه دارد: **1) Full Install** و **2) Full Uninstall**.
@@ -28,13 +28,13 @@ bash OmniRoute --uninstall
 
 ```bash
 # یک دستور، منوی تعاملی - پرامپت‌ها را از ترمینال می‌خواند:
-curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute | bash
+curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute.sh | bash
 
 # روش امن‌تر: اول دانلود، بعد اجرا:
-curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute -o OmniRoute && bash OmniRoute
+curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute.sh -o OmniRoute.sh && bash OmniRoute.sh
 
 # بدون نظارت (کلیدها از متغیرهای محیطی):
-OMNIRoute_GEMINI_KEY=AIza... bash <(curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute) --install
+OMNIRoute_GEMINI_KEY=AIza... bash <(curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute.sh) --install
 ```
 
 > نکته: در حالت `curl ... | bash`، ورودی stdin جریان بایت‌های خودِ
@@ -46,7 +46,7 @@ OMNIRoute_GEMINI_KEY=AIza... bash <(curl -fsSL https://raw.githubusercontent.com
 باز):
 
 ```bash
-git clone --depth 1 https://github.com/im-JvD/OmniRoute-OpenCode && bash OmniRoute-OpenCode/OmniRoute
+git clone --depth 1 https://github.com/im-JvD/OmniRoute-OpenCode && bash OmniRoute.sh-OpenCode/OmniRoute.sh
 ```
 
 ## «Full Install» چه کارهایی انجام می‌دهد
