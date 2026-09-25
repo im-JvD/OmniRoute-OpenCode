@@ -65,6 +65,9 @@ common_env() {
   export OMNIRoute_MASTER_KEY_FILE="$HOME/omniroute-master.key"
   export OMNIRoute_KEYS_FILE="$HOME/omniroute-keys.env"
   export OMNIRoute_SKIP_SWAP=1
+  # Piped installs save a local manager copy via download - point that at
+  # the local file so tests stay hermetic (no real network).
+  export OMNIRoute_MANAGER_URL="file://$SCRIPT"
 }
 
 run_mgr() {
@@ -370,8 +373,14 @@ test_T13_piped_stdin_tty() {
   assert_grep "menu option chosen" "Full Install" "$TESTROOT/tty.log" 2>/dev/null || true
   assert "opencode.json written" jq -e . "$CFG" 2>/dev/null || bad "opencode.json written"
   assert "6/6 tests passed" grep -q "Verification: 6/6 tests passed" "$log"
+  assert_not_grep "banner re-run line is a real path" 'bash "bash"' "$TESTROOT/tty.log"
+  local shim_manager
+  shim_manager="$(sed -n 's/^MANAGER=//p' /usr/local/bin/omni 2>/dev/null | tr -d '"')"
+  assert "piped install saved a local manager copy" test -n "$shim_manager" -a -f "$shim_manager"
+  assert "saved manager copy is runnable" bash -c "bash -n '$shim_manager'"
   # cleanup
   bash "$SCRIPT" --uninstall --yes < /dev/null >>"$TESTROOT/tty-uninstall.log" 2>&1 || true
+  assert "uninstall removed the saved manager copy" test ! -f "$HOME/.omniroute-manager/OmniRoute.sh"
 }
 
 test_T14_big_catalog_and_manage() {
