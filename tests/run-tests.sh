@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test harness for omniroute-manager.sh (sandbox / isolated Docker testing).
+# Test harness for OmniRoute (root script) (sandbox / isolated Docker testing).
 #
 # Simulates the target WSL2 environment:
 #   - sanctioned network: registry-1.docker.io (docker.io refs) -> 403,
@@ -18,7 +18,7 @@ set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
-SCRIPT="$ROOT/omniroute-manager.sh"
+SCRIPT="$ROOT/OmniRoute"
 TESTROOT="${TESTROOT:-/tmp/omniroute-mgr-tests}"
 PASS=0; FAIL=0; FAILED_NAMES=()
 
@@ -38,6 +38,10 @@ common_env() {
   unset OMNIRoute_NO_DOCKER_BUILD OMNIRoute_IMAGE_GHCR OMNIRoute_IMAGE_HUB
   unset OMNIRoute_GROQ_KEY OMNIRoute_OPENROUTER_KEY OMNIRoute_GEMINI_KEY
   unset OMNIRoute_CEREBRAS_KEY OMNIRoute_MISTRAL_KEY
+  # This sandbox CAN have a controlling terminal (so /dev/tty would look
+  # "interactive"). Force the non-TTY path for every test unless a test
+  # explicitly unsets this (T11/T13 run under a real pty via script(1)).
+  export OMNIRoute_FORCE_NO_TTY=1
   # Fake HOME keeps the sandbox clean and exercises the ~/ paths.
   export HOME="$TESTROOT/home"
   export MOCK_STATE="$TESTROOT/state"
@@ -276,6 +280,7 @@ test_T10_build_oom_node_fallback() {
 test_T11_interactive_tty() {
   say "== T11: interactive TTY run (menu + 5 prompts, via pty) =="
   reset_state; common_env
+  unset OMNIRoute_FORCE_NO_TTY
   export PATH="$HERE/mock-bin:$PATH"
   unset OMNIRoute_GROQ_KEY OMNIRoute_OPENROUTER_KEY OMNIRoute_GEMINI_KEY OMNIRoute_CEREBRAS_KEY OMNIRoute_MISTRAL_KEY 2>/dev/null || true
   local rc=1
@@ -331,6 +336,35 @@ EOF
   run_mgr --uninstall --yes >/dev/null 2>&1 || true
 }
 
+test_T13_piped_stdin_tty() {
+  say "== T13: curl|bash-style run (script piped into bash, tty present) =="
+  reset_state; common_env
+  unset OMNIRoute_FORCE_NO_TTY
+  export PATH="$HERE/mock-bin:$PATH"
+  unset OMNIRoute_GROQ_KEY OMNIRoute_OPENROUTER_KEY OMNIRoute_GEMINI_KEY OMNIRoute_CEREBRAS_KEY OMNIRoute_MISTRAL_KEY
+  # Simulates: curl ... | bash
+  #   - the script bytes arrive on bash's STDIN (not a tty),
+  #   - a controlling terminal (pty via script(1)) exists, so prompts must
+  #     read from /dev/tty,
+  #   - the "keystrokes" are typed into the pty (stdin of script(1)).
+  local rc=1
+  if command -v script >/dev/null 2>&1; then
+    printf '1\ngsk_pipe_groq\n\nAIza_pipe_gemini\n\npipe_mistral\n' | \
+      timeout 120 script -qec "bash < '$SCRIPT'" /dev/null >"$TESTROOT/tty.log" 2>&1
+    rc=$?
+    cp "$TESTROOT/home/omniroute-install.log" "$log" 2>/dev/null || true
+  else
+    bad "util-linux 'script' not available - piped TTY test skipped as FAIL"
+  fi
+  mkcfg
+  assert "piped install exited 0 (rc=$rc)" test "$rc" -eq 0
+  assert_grep "menu option chosen" "Full Install" "$TESTROOT/tty.log" 2>/dev/null || true
+  assert "opencode.json written" jq -e . "$CFG" 2>/dev/null || bad "opencode.json written"
+  assert "6/6 tests passed" grep -q "Verification: 6/6 tests passed" "$log"
+  # cleanup
+  bash "$SCRIPT" --uninstall --yes < /dev/null >>"$TESTROOT/tty-uninstall.log" 2>&1 || true
+}
+
 # ---------------------------------------------------------------------------
 run_test() {
   case "$1" in
@@ -346,11 +380,12 @@ run_test() {
     T10) test_T10_build_oom_node_fallback ;;
     T11) test_T11_interactive_tty ;;
     T12) test_T12_preserve_other_providers ;;
+    T13) test_T13_piped_stdin_tty ;;
     *) say "unknown test $1" ;;
   esac
 }
 
-SELECTED="${*:-T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12}"
+SELECTED="${*:-T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13}"
 say "OmniRoute manager test harness"
 say "Script: $SCRIPT"
 say "Tests : $SELECTED"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mock `pm2` (subset used by omniroute-manager.sh).
+# Mock `pm2` (subset used by OmniRoute (root script)).
 #   pm2 start <script> --name <n> [--interpreter X] [--time]
 #   pm2 jlist
 #   pm2 delete <n>

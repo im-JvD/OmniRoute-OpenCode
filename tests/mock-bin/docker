@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mock `docker` CLI for sandbox testing of omniroute-manager.sh.
+# Mock `docker` CLI for sandbox testing of OmniRoute (root script).
 # Simulates:
 #   - sanctions: registry-1.docker.io (diegosouzapw/omniroute) -> 403
 #   - GHCR (ghcr.io/diegosouzapw/omniroute) -> success

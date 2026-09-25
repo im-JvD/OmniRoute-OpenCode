@@ -12,9 +12,9 @@
 ## فایل تکی
 
 ```bash
-bash omniroute-manager.sh            # منوی تعاملی (TTY)
-bash omniroute-manager.sh --install  # اجرای بدون نظارت (کلیدها از طریق متغیرهای محیطی)
-bash omniroute-manager.sh --uninstall
+bash OmniRoute            # منوی تعاملی (TTY)
+bash OmniRoute --install  # اجرای بدون نظارت (کلیدها از طریق متغیرهای محیطی)
+bash OmniRoute --uninstall
 ```
 
 * منو دقیقاً دو گزینه دارد: **1) Full Install** و **2) Full Uninstall**.
@@ -23,6 +23,31 @@ bash omniroute-manager.sh --uninstall
 * ایمن در ترمینال‌های غیر TTY (`read` محدود با timeout، فول‌بک به
   متغیر محیطی یا مقدار پیش‌فرض، هیچ‌گاه hang نمی‌شود).
 * خروجی اسکریپت کاملاً انگلیسی و ASCII-only است (نیاز ثابت ترمینال).
+
+## اجرای مستقیم از GitHub (بدون دانلود دستی)
+
+```bash
+# یک دستور، منوی تعاملی - پرامپت‌ها را از ترمینال می‌خواند:
+curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute | bash
+
+# روش امن‌تر: اول دانلود، بعد اجرا:
+curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute -o OmniRoute && bash OmniRoute
+
+# بدون نظارت (کلیدها از متغیرهای محیطی):
+OMNIRoute_GEMINI_KEY=AIza... bash <(curl -fsSL https://raw.githubusercontent.com/im-JvD/OmniRoute-OpenCode/main/OmniRoute) --install
+```
+
+> نکته: در حالت `curl ... | bash`، ورودی stdin جریان بایت‌های خودِ
+> اسکریپت است؛ اسکریپت پرامپت‌های تعاملی را از ترمینال کنترل‌کننده
+> (`/dev/tty`) می‌خواند، نه از stdin، بنابراین منو و پرامپت‌های کلید
+> در ترمینال شما ظاهر می‌شوند.
+
+اگر `raw.githubusercontent.com` در شبکه شما مسدود باشد (اما خود GitHub
+باز):
+
+```bash
+git clone --depth 1 https://github.com/im-JvD/OmniRoute-OpenCode && bash OmniRoute-OpenCode/OmniRoute
+```
 
 ## «Full Install» چه کارهایی انجام می‌دهد
 
@@ -100,7 +125,7 @@ overrideهای `OMNIRoute_*` برای تست و کاربردهای پیشرفت�
 پورت 20128).
 
 ```bash
-bash tests/run-tests.sh        # T1 تا T12 - در حال حاضر 77/77 سبز
+bash tests/run-tests.sh        # T1 تا T13 - در حال حاضر 81/81 سبز
 ```
 
 جدول «واقعی در برابر شبیه‌سازی» را در

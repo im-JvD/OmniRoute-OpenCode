@@ -220,7 +220,18 @@ make_tmp() {
 # ---------------------------------------------------------------------------
 # 3. Small utilities
 # ---------------------------------------------------------------------------
-is_tty_stdin() { [ -t 0 ]; }
+# Interactive-terminal detection. True when stdin is a TTY (the normal
+# case), OR when the script is piped in (curl ... | bash) but a
+# controlling terminal still exists for the user to type into. In the
+# piped case stdin carries the script's own bytes, so prompts must read
+# from /dev/tty instead of stdin.
+# OMNIRoute_FORCE_NO_TTY=1 forces the non-TTY path (used by the test
+# harness to simulate a terminal-less session deterministically).
+is_tty() {
+  [ -n "${OMNIRoute_FORCE_NO_TTY:-}" ] && return 1
+  [ -t 0 ] && return 0
+  [ -r /dev/tty ] && [ -w /dev/tty ]
+}
 
 # DC: run docker, escalating to sudo ONLY when the current user genuinely
 # lacks socket access. A freshly installed WSL user joins the docker group
@@ -304,12 +315,20 @@ svc_active() {
 # (NOT via stdout - this function is safe to call from command substitution
 # and from subshells). Non-TTY stdin: uses the env var $3 when set, else the
 # default. NEVER blocks a non-TTY session: no read without a TTY.
+# Piped script (curl ... | bash): the answer is read from /dev/tty, since
+# stdin holds the script itself.
 prompt_line() {
   local prompt="$1" default="${2:-}" var_name="${3:-}"
   local reply=""
-  if is_tty_stdin; then
-    # shellcheck disable=SC2162
-    read -r -t 180 -p "$prompt [${default}]: " reply || reply="${default}"
+  if is_tty; then
+    if [ -t 0 ]; then
+      # shellcheck disable=SC2162
+      read -r -t 180 -p "$prompt [${default}]: " reply || reply="${default}"
+    else
+      # Piped in (curl ... | bash): take the answer from the controlling
+      # terminal; read -p writes the prompt to stderr (the terminal).
+      read -r -t 180 -p "$prompt [${default}]: " reply </dev/tty || reply="${default}"
+    fi
     # Ctrl-D / timeout leaves reply empty -> default.
   elif [ -n "$var_name" ] && [ -n "${!var_name:-}" ]; then
     reply="${!var_name}"
@@ -524,7 +543,7 @@ collect_keys() {
   local groq_key="" openrouter_key="" gemini_key="" cerebras_key="" mistral_key=""
 
   if [ -f "$KEYS_FILE" ]; then
-    if is_tty_stdin; then
+    if is_tty; then
       if prompt_yes_no "Saved keys found in $KEYS_FILE. Reuse them? (recommended on re-runs)" "y"; then
         apply_saved_keys
         log "Reusing saved keys."
@@ -1422,7 +1441,7 @@ confirm_uninstall() {
     log "Uninstall confirmed via --yes."
     return 0
   fi
-  if is_tty_stdin; then
+  if is_tty; then
     prompt_yes_no "This removes the OmniRoute container, image, source, data and the" \
       "OpenCode 'omniroute' provider config. Continue?" "n" || die "Aborted by user."
     return 0
@@ -1505,7 +1524,7 @@ do_uninstall() {
   [ -n "$opencode_dir" ] || opencode_dir="$HOME/.config/opencode"
   local cfg="$opencode_dir/opencode.json"
   if [ -f "$cfg" ]; then
-    if [ "$ASSUME_YES" -eq 1 ] || is_tty_stdin; then
+    if [ "$ASSUME_YES" -eq 1 ] || is_tty; then
       if [ "$ASSUME_YES" -eq 1 ] || prompt_yes_no "Delete $cfg ?" "y"; then
         rm -f "$cfg" && log "Deleted OpenCode config: $cfg" || warn "Could not delete $cfg"
       fi
@@ -1594,7 +1613,7 @@ main() {
   SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
   parse_args "$@"
   if [ -z "$MODE" ]; then
-    if is_tty_stdin; then
+    if is_tty; then
       main_menu
     else
       err "No action selected. Non-TTY sessions must pass --install or --uninstall."

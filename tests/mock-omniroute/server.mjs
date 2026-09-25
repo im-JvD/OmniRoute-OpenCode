@@ -1,6 +1,6 @@
 // Mock OmniRoute HTTP server for sandbox testing.
 // Implements the exact endpoint contract of OmniRoute v3.8.51 that
-// omniroute-manager.sh relies on:
+// OmniRoute (root script) relies on:
 //   GET  /healthz                -> 200 {"status":"ok"} (lightweight liveness)
 //   POST /api/auth/login         -> {"password": admin} -> Set-Cookie auth_token
 //   POST /api/providers/bulk     -> auth_token cookie; {"provider","entries":[...]}
