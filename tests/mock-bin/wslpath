@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Mock `wslpath`. Converts Windows drive paths to Unix paths under
+# $MOCK_WSL_MNT (default /tmp/omniroute-mock/mnt), i.e.
+#   C:\Users\Sepehr system -> <mnt>/c/Users/Sepehr system
+# Supports: wslpath -u <winpath>   and   wslpath <winpath>
+set -u
+MNT="${MOCK_WSL_MNT:-/tmp/omniroute-mock/mnt}"
+arg=""
+mode="u"
+for a in "$@"; do
+  case "$a" in
+    -u) mode="u" ;;
+    -w) mode="w" ;;
+    -*) ;;
+    *) arg="$a" ;;
+  esac
+done
+# Strip trailing CR just in case.
+arg="${arg%$'\r'}"
+if [ "$mode" = "u" ]; then
+  # C:\Users\Foo -> <mnt>/c/Users/Foo
+  p="${arg#\\}"            # drop leading backslash if any
+  p="${p#C:}"              # drop drive
+  p="${p//\\//}"           # backslash -> slash
+  echo "${MNT}/c${p}"
+else
+  # unix -> windows (not needed by the script, but keep symmetric)
+  p="${arg#$MNT/c}"
+  p="${p//\\//}"
+  p="${p//\//\\}"
+  printf 'C:%s' "$p"
+fi

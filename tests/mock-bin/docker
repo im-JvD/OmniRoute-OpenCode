@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# Mock `docker` CLI for sandbox testing of OmniRoute (root script).
+# Simulates:
+#   - sanctions: registry-1.docker.io (diegosouzapw/omniroute) -> 403
+#   - GHCR (ghcr.io/diegosouzapw/omniroute) -> success
+#   - daemon start/stop via `service` shim
+#   - container run -> launches tests/mock-omniroute/server.mjs on the port
+# State lives in $MOCK_STATE (default /tmp/omniroute-mock-state).
+set -u
+STATE="${MOCK_STATE:-/tmp/omniroute-mock-state}"
+mkdir -p "$STATE"
+log() { echo "[mock-docker] $*" >>"$STATE/docker.log"; }
+
+state() { [ -f "$STATE/$1" ] && cat "$STATE/$1" || echo ""; }
+
+cmd="${1:-}"; shift || true
+launch_mock_server() {
+  # $1 = container name; (re)launches the mock OmniRoute server.
+  local srv="${MOCK_SERVER:-$(dirname "$0")/../mock-omniroute/server.mjs}"
+  MOCK_STATE="$STATE" \
+    MOCK_ADMIN_PASSWORD="$(grep -E '^INITIAL_PASSWORD=' "$STATE/env-snapshot" 2>/dev/null | cut -d= -f2- || true)" \
+    MOCK_MASTER_KEY="$(grep -E '^OMNIROUTE_API_KEY=' "$STATE/env-snapshot" 2>/dev/null | cut -d= -f2- || true)" \
+    MOCK_CATALOG="${MOCK_CATALOG:-$(dirname "$0")/../mock-omniroute/catalog.json}" \
+    nohup node "$srv" >>"$STATE/server-$1.log" 2>&1 &
+}
+case "$cmd" in
+  --version|version)
+    echo "Docker version 27.5.1-mock, build sandbox"
+    ;;
+  info)
+    [ "$(state daemon)" = "running" ] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+    echo "Mock Docker daemon info (running)"
+    ;;
+  buildx)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      version) echo "github.com/docker/buildx v0.21.0-mock" ;;
+      build)
+        # Parse args: -t TAG, context '.', flags ignored.
+        tag=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -t|--tag) tag="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ "$(state force_build_oom)" = "1" ]; then
+          echo "ERROR: build failed: cannot allocate memory (simulated OOM)" >&2
+          exit 1
+        fi
+        sleep 1
+        echo "mock build ok -> $tag"
+        [ -n "$tag" ] && echo "sha256:mockbuilt" >"$STATE/img-$(echo "$tag" | tr '/:' '__')"
+        ;;
+      *) ;;
+    esac
+    ;;
+  builder)
+    sub="${1:-}"; shift || true
+    [ "$sub" = "prune" ] && { echo "Total reclaimed space: 0B"; }
+    ;;
+  pull)
+    ref="$1"
+    log "pull $ref"
+    case "$ref" in
+      diegosouzapw/*|docker.io/*|library/*)
+        log "403 Forbidden for $ref (simulated sanction block on registry-1.docker.io)"
+        echo "Error response from registry: 403 Forbidden (simulated sanction block on registry-1.docker.io)" >&2
+        exit 1
+        ;;
+      ghcr.io/*)
+        sleep 1
+        echo "pulled $ref (mock)"
+        name="${ref##*/}"
+        echo "sha256:mockpull" >"$STATE/img-$(echo "$ref" | tr '/:' '__')"
+        ;;
+      *)
+        echo "pulled $ref (mock)"
+        echo "sha256:mockpull" >"$STATE/img-$(echo "$ref" | tr '/:' '__')"
+        ;;
+    esac
+    ;;
+  tag)
+    src="$1"; dst="$2"
+    # Copy image marker; also record digest for the local name.
+    if [ -f "$STATE/img-$(echo "$src" | tr '/:' '__')" ]; then
+      cp "$STATE/img-$(echo "$src" | tr '/:' '__')" "$STATE/img-$(echo "$dst" | tr '/:' '__')"
+    fi
+    log "tag $src -> $dst"
+    ;;
+  run)
+    name=""; env_file=""; image=""; hash=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --env-file) env_file="$2"; shift 2 ;;
+        --label)
+          case "$2" in
+            omniroute.env-hash=*) hash="${2#omniroute.env-hash=}"; shift 2 ;;
+            *) shift 2 ;;
+          esac ;;
+        -p|-v|-e|--restart) shift 2 ;;
+        -d) shift ;;
+        *) image="$1"; shift ;;
+      esac
+    done
+    [ -n "$name" ] || { echo "mock: --name required" >&2; exit 1; }
+    [ -f "$STATE/img-$(echo "$image" | tr '/:' '__')" ] || { echo "mock: image $image not present" >&2; exit 1; }
+    # Parse env-file for the mock server config.
+    admin_pw="" master_key=""
+    if [ -n "$env_file" ] && [ -f "$env_file" ]; then
+      admin_pw="$(grep -E '^INITIAL_PASSWORD=' "$env_file" | cut -d= -f2- || true)"
+      master_key="$(grep -E '^OMNIROUTE_API_KEY=' "$env_file" | cut -d= -f2- || true)"
+    fi
+    echo "running" >"$STATE/container"
+    echo "$name" >"$STATE/container-name"
+    [ -n "$hash" ] && echo "$hash" >"$STATE/container-hash"
+    echo "mock-$(date +%s%N)" >"$STATE/container-id"
+    [ -n "$env_file" ] && [ -f "$env_file" ] && cp "$env_file" "$STATE/env-snapshot"
+    # Launch the mock OmniRoute server in the background.
+    SERVER_BIN="${MOCK_SERVER:-$(dirname "$0")/../mock-omniroute/server.mjs}"
+    MOCK_STATE="$STATE" MOCK_ADMIN_PASSWORD="$admin_pw" MOCK_MASTER_KEY="$master_key" \
+      MOCK_CATALOG="${MOCK_CATALOG:-$(dirname "$0")/../mock-omniroute/catalog.json}" \
+      MOCK_BOOT_DELAY="${MOCK_BOOT_DELAY:-3}" \
+      nohup node "$SERVER_BIN" >>"$STATE/server-$name.log" 2>&1 &
+    echo "mock-container-id-1234567890"
+    ;;
+  start)
+    name="$1"
+    [ "$(state container-name)" = "$name" ] || { echo "mock: no such container" >&2; exit 1; }
+    if [ ! -s "$STATE/server-$name.pid" ] || ! kill -0 "$(cat "$STATE/server-$name.pid")" 2>/dev/null; then
+      launch_mock_server "$name"
+    fi
+    echo "running" >"$STATE/container"
+    echo "$name"
+    ;;
+  restart)
+    name="$1"
+    [ "$(state container-name)" = "$name" ] || { echo "mock: no such container" >&2; exit 1; }
+    if [ -f "$STATE/server-$name.pid" ]; then
+      kill "$(cat "$STATE/server-$name.pid")" 2>/dev/null || true
+      rm -f "$STATE/server-$name.pid"
+    fi
+    launch_mock_server "$name"
+    echo "running" >"$STATE/container"
+    echo "$name"
+    ;;
+  stop)
+    name="$1"
+    if [ -f "$STATE/server-$name.pid" ]; then
+      kill "$(cat "$STATE/server-$name.pid")" 2>/dev/null || true
+      rm -f "$STATE/server-$name.pid"
+    fi
+    echo "stopped" >"$STATE/container"
+    echo "$name" >>"$STATE/stopped-history"
+    ;;
+  rm)
+    name="$1"
+    [ "$(state container-name)" = "$name" ] || { echo "mock: no such container $name" >&2; exit 1; }
+    rm -f "$STATE/container" "$STATE/container-name" "$STATE/container-hash" "$STATE/container-id"
+    ;;
+  ps)
+    all=0
+    for a in "$@"; do [ "$a" = "-a" ] && all=1; done
+    if [ "$(state container)" = "running" ]; then
+      cat "$STATE/container-name" 2>/dev/null
+    elif [ "$all" = "1" ] && [ -n "$(state container-name)" ]; then
+      cat "$STATE/container-name" 2>/dev/null
+    fi
+    ;;
+  inspect)
+    # docker inspect --format '<fmt>' <name>
+    name="${@: -1}"
+    [ "$(state container-name)" = "$name" ] || { echo "Error: No such object: $name" >&2; exit 1; }
+    fmt="${2:-}"
+    case "$fmt" in
+      *omniroute.env-hash*) state container-hash ;;
+      *) echo "mock-inspect-value" ;;
+    esac
+    ;;
+  logs)
+    tail_n=""; name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --tail) tail_n="$2"; shift 2 ;;
+        --tail=*) tail_n="${1#--tail=}"; shift ;;
+        -f) shift ;;
+        *) name="$1"; shift ;;
+      esac
+    done
+    [ -n "$name" ] && [ -f "$STATE/server-$name.log" ] && tail -n "${tail_n:-200}" "$STATE/server-$name.log"
+    ;;
+  images)
+    # docker images -q REF
+    ref=""
+    for a in "$@"; do [ "$a" != "-q" ] && ref="$a"; done
+    [ -n "$ref" ] || { ls "$STATE"/img-* 2>/dev/null | sed "s#$STATE/img-#sha256:#"; exit 0; }
+    [ -f "$STATE/img-$(echo "$ref" | tr '/:' '__')" ] && cat "$STATE/img-$(echo "$ref" | tr '/:' '__')"
+    ;;
+  rmi)
+    ref="$1"
+    if [ -f "$STATE/img-$(echo "$ref" | tr '/:' '__')" ]; then
+      rm -f "$STATE/img-$(echo "$ref" | tr '/:' '__')"
+      echo "Deleted: $ref"
+    else
+      echo "Error: No such image: $ref" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    log "unhandled: $cmd $*"
+    exit 0
+    ;;
+esac
+exit 0

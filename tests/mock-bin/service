@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Mock `service` (WSL has no systemd, so the script falls back to this).
+# Handles: service docker start|stop|restart|status
+STATE="${MOCK_STATE:-/tmp/omniroute-mock-state}"
+mkdir -p "$STATE"
+svc="${1:-}"
+cmd="${2:-}"
+if [ "$svc" = "docker" ]; then
+  case "$cmd" in
+    start) echo "running" >"$STATE/daemon"; echo " * Starting docker (mock)" ;;
+    stop) echo "stopped" >"$STATE/daemon"; echo " * Stopping docker (mock)" ;;
+    restart) echo "running" >"$STATE/daemon"; echo " * Restarting docker (mock)" ;;
+    status)
+      if [ "$(cat "$STATE/daemon" 2>/dev/null)" = "running" ]; then
+        echo " * docker is running (mock)"; exit 0
+      else
+        echo " * docker is NOT running (mock)" >&2; exit 3
+      fi
+      ;;
+    *) exit 0 ;;
+  esac
+fi
+exit 0

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Mock `npm` for Node-mode tests. Supports:
+#   npm install -g [--flags] omniroute   -> installs a fake `omniroute` bin
+#   npm install -g [--flags] pm2         -> installs a fake `pm2` bin
+#   npm ci / npm run build / npm -v      -> minimal no-ops for error paths
+STATE="${MOCK_STATE:-/tmp/omniroute-mock-state}"
+BIN_DIR="${MOCK_STATE}/bin"
+mkdir -p "$BIN_DIR"
+
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    install) mode=install; shift ;;
+    -g|--no-audit|--no-fund|--registry)
+      [ "$1" = "--registry" ] && shift
+      shift ;;
+    ci) mode=ci; shift ;;
+    run) mode=run; shift ;;
+    -v|version) echo "10.9.9-mock"; exit 0 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+
+case "${mode:-install}" in
+  install)
+    pkg="${args[0]:-omniroute}"
+    case "$pkg" in
+      omniroute)
+        cat >"$BIN_DIR/omniroute" <<'FAKEBIN'
+#!/usr/bin/env bash
+# Fake `omniroute` CLI (serve only), backed by the mock OmniRoute server.
+case "${1:-}" in
+  serve)
+    export MOCK_STATE="${MOCK_STATE:-/tmp/omniroute-mock-state}"
+    export MOCK_ADMIN_PASSWORD="${INITIAL_PASSWORD:-}"
+    export MOCK_MASTER_KEY="${OMNIROUTE_API_KEY:-}"
+    export MOCK_CATALOG="${MOCK_CATALOG:-$(cd "$(dirname "$0")/../.." && pwd)/mock-omniroute/catalog.json}"
+    exec node "${MOCK_SERVER:-$(cd "$(dirname "$0")/../.." && pwd)/mock-omniroute/server.mjs}"
+    ;;
+  *) echo "fake omniroute: unknown command $1" >&2; exit 1 ;;
+esac
+FAKEBIN
+        chmod +x "$BIN_DIR/omniroute"
+        echo "added 1 package in 1s (mock: $pkg)"
+        ;;
+      pm2)
+        cp "$(cd "$(dirname "$0")" && pwd)/pm2" "$BIN_DIR/pm2" 2>/dev/null || cp "$MOCK_PM2_SRC" "$BIN_DIR/pm2"
+        chmod +x "$BIN_DIR/pm2"
+        echo "added 1 package in 1s (mock: $pkg)"
+        ;;
+      *)
+        echo "npm error 404 Not Found - $pkg (mock)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  ci)
+    echo "npm ci (mock) - not available in sandbox" >&2
+    exit 1
+    ;;
+  run)
+    echo "npm run (mock) - not available in sandbox" >&2
+    exit 1
+    ;;
+esac
+exit 0
